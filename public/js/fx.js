@@ -1,5 +1,21 @@
-// 2D-Effekte: Funken auf dem Brett, Beben, Konfetti, Münzregen
+// 2D-Effekte: Splitter & Funken auf dem Brett, Beben, Konfetti, Münzregen
+import { pieceSVG } from './pieces.js';
 const rand = (a, b) => a + Math.random() * (b - a);
+
+// Figurenbilder für die Splitter (einmal laden, dann wiederverwenden)
+const imgCache = new Map();
+function pieceImage(type, color, skin) {
+  const key = type + color + skin;
+  if (!imgCache.has(key)) {
+    const img = new Image();
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pieceSVG(type, color, skin));
+    imgCache.set(key, img);
+  }
+  return imgCache.get(key);
+}
+export function preloadPieces(skins) {
+  for (const c of ['w', 'b']) for (const t of 'pnbrqk') pieceImage(t, c, skins[c]);
+}
 
 // ---------------------------------------------------------------- Partikel-Canvas über dem Brett
 let bcv = null, bctx = null, bparts = [], braf = 0;
@@ -17,17 +33,36 @@ function boardCanvas(boardEl) {
   return { w: bcv.width, h: bcv.height, dpr };
 }
 
-function loop() {
+let lastT = 0;
+function loop(now) {
   braf = 0;
   if (!bctx) return;
+  const dt = Math.min(0.05, lastT ? (now - lastT) / 1000 : 1 / 60); lastT = now;
+  const k = dt * 60; // Bewegung unabhängig von der Bildwiederholrate
   bctx.clearRect(0, 0, bcv.width, bcv.height);
-  bctx.globalCompositeOperation = 'lighter';
-  bparts = bparts.filter((p) => (p.life -= 1 / 60) > 0);
+  bparts = bparts.filter((p) => (p.life -= dt) > 0);
   for (const p of bparts) {
-    p.vy += p.g; p.vx *= p.drag; p.vy *= p.drag; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
-    const a = Math.min(1, p.life / p.max * 1.5);
+    if (p.delay > 0) { p.delay -= dt; p.life += dt; continue; }
+    p.vy += p.g * k; const dr = Math.pow(p.drag, k); p.vx *= dr; p.vy *= dr; p.x += p.vx * k; p.y += p.vy * k; p.rot += p.vr * k;
+    const a = Math.min(1, p.life / p.max * (p.shape === 'tri' ? 2.5 : 1.5));
     bctx.globalAlpha = a;
-    if (p.shape === 'ring') {
+    bctx.globalCompositeOperation = p.shape === 'tri' || p.shape === 'dust' ? 'source-over' : 'lighter';
+    if (p.shape === 'tri') {
+      // Splitter aus dem echten Figurenbild
+      const sc = 0.85 + 0.15 * a;
+      bctx.save(); bctx.translate(p.x, p.y); bctx.rotate(p.rot); bctx.scale(sc, sc);
+      bctx.beginPath(); bctx.moveTo(p.pts[0], p.pts[1]); bctx.lineTo(p.pts[2], p.pts[3]); bctx.lineTo(p.pts[4], p.pts[5]); bctx.closePath();
+      bctx.save(); bctx.clip();
+      if (p.img.complete) bctx.drawImage(p.img, -p.cx, -p.cy, p.S, p.S);
+      bctx.restore();
+      bctx.strokeStyle = 'rgba(255,255,255,.18)'; bctx.lineWidth = 1; bctx.stroke();
+      bctx.restore();
+    } else if (p.shape === 'dust') {
+      const g = bctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.s);
+      g.addColorStop(0, `rgba(${p.c},${0.28 * a})`); g.addColorStop(1, `rgba(${p.c},0)`);
+      bctx.globalAlpha = 1; bctx.fillStyle = g; bctx.beginPath(); bctx.arc(p.x, p.y, p.s, 0, Math.PI * 2); bctx.fill();
+      p.s += p.grow * k;
+    } else if (p.shape === 'ring') {
       bctx.strokeStyle = p.c; bctx.lineWidth = p.s * (0.3 + a);
       bctx.beginPath(); bctx.arc(p.x, p.y, p.r0 + (1 - p.life / p.max) * p.grow, 0, Math.PI * 2); bctx.stroke();
     } else if (p.shape === 'shard') {
@@ -39,10 +74,41 @@ function loop() {
       bctx.fillStyle = g; bctx.beginPath(); bctx.arc(p.x, p.y, p.s, 0, Math.PI * 2); bctx.fill();
     }
   }
-  bctx.globalAlpha = 1;
-  if (bparts.length) braf = requestAnimationFrame(loop);
+  bctx.globalAlpha = 1; bctx.globalCompositeOperation = 'source-over';
+  if (bparts.length) braf = requestAnimationFrame(loop); else lastT = 0;
 }
 const kick = () => { if (!braf) braf = requestAnimationFrame(loop); };
+
+// Geschlagene Figur zerspringt in ~24 Splitter ihres eigenen Bildes
+export function shatterPiece(board, sq, type, color, skin, fromSq) {
+  if (!sq || !type) return;
+  const dims = boardCanvas(board.el);
+  const { x, y, size } = center(board, sq, dims);
+  const img = pieceImage(type, color, skin);
+  const S = size * 0.88, ox = -S / 2, oy = -S / 2 + size * 0.03;
+  // Stoßrichtung: vom angreifenden Feld weg
+  let dirx = 0, diry = -1;
+  if (fromSq) { const f = center(board, fromSq, dims); const dx = x - f.x, dy = y - f.y, d = Math.hypot(dx, dy) || 1; dirx = dx / d; diry = dy / d; }
+  const N = 4, cell = S / N;
+  for (let gy = 0; gy < N; gy++) for (let gx = 0; gx < N; gx++) {
+    const jx = () => rand(-cell * 0.18, cell * 0.18);
+    const x0 = gx * cell, y0 = gy * cell, x1 = x0 + cell, y1 = y0 + cell;
+    const quads = Math.random() < 0.5
+      ? [[x0, y0, x1 + jx(), y0, x0, y1 + jx()], [x1, y0, x1, y1, x0 + jx(), y1]]
+      : [[x0, y0, x1, y0 + jx(), x1, y1], [x0, y0, x1 + jx(), y1, x0, y1]];
+    for (const t of quads) {
+      const cx = (t[0] + t[2] + t[4]) / 3, cy = (t[1] + t[3] + t[5]) / 3;
+      const rx = cx - S / 2, ry = cy - S / 2, rd = Math.hypot(rx, ry) || 1;
+      const sp = rand(1.2, 3.4) * dims.dpr;
+      bparts.push({
+        shape: 'tri', img, S, cx, cy, pts: [t[0] - cx, t[1] - cy, t[2] - cx, t[3] - cy, t[4] - cx, t[5] - cy],
+        x: x + ox + cx, y: y + oy + cy,
+        vx: (rx / rd) * sp + dirx * rand(1, 3) * dims.dpr, vy: (ry / rd) * sp + diry * rand(1, 3) * dims.dpr - rand(1.5, 3.5) * dims.dpr,
+        g: 0.32 * dims.dpr, drag: 0.985, rot: 0, vr: rand(-0.18, 0.18), life: rand(0.55, 0.8), max: 0.8, delay: 0,
+      });
+    }
+  }
+}
 
 // Mittelpunkt eines Feldes in Canvas-Pixeln
 function center(board, sq, dims) {
@@ -58,9 +124,11 @@ export function burstAt(board, sq, { kind = 'capture', color = '#ffd166' } = {})
   const { x, y, size } = center(board, sq, dims);
   const add = (o) => bparts.push({ x, y, vx: 0, vy: 0, g: 0, drag: 0.94, rot: 0, vr: 0, s: 4, life: 0.6, max: 0.6, c: color, shape: 'dot', ...o });
   if (kind === 'capture') {
-    for (let i = 0; i < 26; i++) { const a = rand(0, Math.PI * 2), v = rand(2, 7) * dims.dpr; add({ vx: Math.cos(a) * v, vy: Math.sin(a) * v - 2, g: 0.25 * dims.dpr, s: rand(3, 7) * dims.dpr, life: rand(0.4, 0.8), max: 0.8, c: i % 3 ? '#ffb347' : '#fff3c4' }); }
-    for (let i = 0; i < 10; i++) { const a = rand(0, Math.PI * 2), v = rand(3, 8) * dims.dpr; add({ shape: 'shard', vx: Math.cos(a) * v, vy: Math.sin(a) * v - 3, g: 0.35 * dims.dpr, s: rand(4, 8) * dims.dpr, vr: rand(-0.4, 0.4), life: rand(0.5, 0.9), max: 0.9, c: color }); }
-    add({ shape: 'ring', r0: size * 0.2, grow: size * 0.9, s: 5 * dims.dpr, life: 0.45, max: 0.45, c: '#ffffff' });
+    // Weicher Einschlag: kurzer Lichtpunkt, feine Funken, Staubwolke, dünne Druckwelle
+    add({ s: size * 0.55, life: 0.18, max: 0.18, c: 'rgba(255,244,214,.9)' });
+    for (let i = 0; i < 14; i++) { const a = rand(0, Math.PI * 2), v = rand(1.5, 4.5) * dims.dpr; add({ vx: Math.cos(a) * v, vy: Math.sin(a) * v - 1, g: 0.12 * dims.dpr, s: rand(1.5, 3.2) * dims.dpr, life: rand(0.3, 0.55), max: 0.55, c: i % 3 ? '#ffc56b' : '#fff6dc' }); }
+    for (let i = 0; i < 5; i++) { const a = rand(0, Math.PI * 2); add({ shape: 'dust', x: x + Math.cos(a) * size * 0.15, y: y + size * 0.2, vx: Math.cos(a) * 0.5 * dims.dpr, vy: -0.25 * dims.dpr, s: size * 0.22, grow: 0.5 * dims.dpr, life: rand(0.5, 0.8), max: 0.8, c: color === '#f2f2f2' ? '210,205,195' : '90,90,100' }); }
+    add({ shape: 'ring', r0: size * 0.3, grow: size * 0.55, s: 2 * dims.dpr, life: 0.35, max: 0.35, c: 'rgba(255,255,255,.55)' });
   } else if (kind === 'move') {
     add({ shape: 'ring', r0: size * 0.25, grow: size * 0.45, s: 3 * dims.dpr, life: 0.35, max: 0.35, c: 'rgba(255,255,255,.7)' });
     for (let i = 0; i < 8; i++) { const a = rand(0, Math.PI * 2); add({ x: x + Math.cos(a) * size * 0.35, y: y + size * 0.3, vx: Math.cos(a) * 1.2 * dims.dpr, vy: -rand(0.3, 1) * dims.dpr, s: rand(2, 4) * dims.dpr, life: 0.4, max: 0.4, c: 'rgba(255,255,255,.55)' }); }

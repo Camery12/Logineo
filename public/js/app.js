@@ -5,7 +5,7 @@ import { pieceURL } from './pieces.js';
 import { BOARDS, PIECES, FINISHERS, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem } from './catalog.js';
 import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
-import { burstAt, shakeBoard, checkFlash, confetti, coinRain } from './fx.js';
+import { burstAt, shakeBoard, checkFlash, confetti, coinRain, shatterPiece, preloadPieces } from './fx.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -319,6 +319,7 @@ function flipBoard() {
 function setupBoardLook(themeId, skins, orientation) {
   $('.board-col').classList.remove('flipped');
   $('.board-frame').classList.remove('mated');
+  preloadPieces(skins);
   board.setTheme(themeId);
   applyBoardTheme($('.board-frame'), themeId);
   board.setSkins(skins);
@@ -338,13 +339,21 @@ function moveFx(m, inCheck, isCap) {
   const to = m?.to || m?.lastMove?.to;
   if (!to) return;
   const frame = $('.board-frame');
+  const from = m?.from || m?.lastMove?.from;
+  if (isCap && m?.captured) {
+    // Geschlagene Figur zerspringt sofort, der Angreifer gleitet in die Splitter
+    const mover = board.chess.get(to)?.color || (board.chess.turn() === 'w' ? 'b' : 'w');
+    const victim = mover === 'w' ? 'b' : 'w';
+    const capSq = m?.flags?.includes('e') && from ? to[0] + from[1] : to;
+    shatterPiece(board, capSq, m.captured, victim, board.skins[victim], from);
+  }
   setTimeout(() => {
     const el = board.pieceEls.get(to)?.el;
-    if (el) { el.classList.remove('land'); void el.offsetWidth; el.classList.add('land'); setTimeout(() => el.classList.remove('land'), 350); }
-    if (isCap) { burstAt(board, to, { kind: 'capture', color: board.chess.get(to)?.color === 'w' ? '#3b3b4a' : '#f2f2f2' }); shakeBoard(frame); }
+    if (el) { el.classList.remove('land'); void el.offsetWidth; el.classList.add('land'); setTimeout(() => el.classList.remove('land'), 250); }
+    if (isCap) burstAt(board, to, { kind: 'capture', color: board.chess.get(to)?.color === 'w' ? '#3b3b4a' : '#f2f2f2' });
     else burstAt(board, to, { kind: 'move' });
     if (m?.promotion || m?.flags?.includes('p')) { burstAt(board, to, { kind: 'promo' }); el?.classList.add('promo-glow'); setTimeout(() => el?.classList.remove('promo-glow'), 1000); }
-    if (inCheck) { const k = board.kingSquare(board.chess.turn()); burstAt(board, k, { kind: 'check' }); checkFlash(frame); shakeBoard(frame); }
+    if (inCheck) { const k = board.kingSquare(board.chess.turn()); burstAt(board, k, { kind: 'check' }); checkFlash(frame); }
   }, 190);
 }
 

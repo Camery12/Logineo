@@ -9,7 +9,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // Kino-Filter: chromatische Aberration, Filmkorn, Vignette, Glitch, Impact-Frames (Invertierung)
 const FXShader = {
-  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAberr: { value: 0 }, uGrain: { value: 0.045 }, uInvert: { value: 0 }, uGlitch: { value: 0 }, uVignette: { value: 0.45 } },
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAberr: { value: 0 }, uGrain: { value: 0.028 }, uInvert: { value: 0 }, uGlitch: { value: 0 }, uVignette: { value: 0.45 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `
     uniform sampler2D tDiffuse; uniform float uTime, uAberr, uGrain, uInvert, uGlitch, uVignette; varying vec2 vUv;
@@ -19,7 +19,7 @@ const FXShader = {
       if (uGlitch > 0.001) {
         float band = floor(uv.y * 22.0 + floor(uTime * 16.0) * 5.0);
         float r = hash(vec2(band, floor(uTime * 24.0)));
-        if (r < uGlitch * 0.55) uv.x += (hash(vec2(band, 3.7)) - 0.5) * 0.16 * uGlitch;
+        if (r < uGlitch * 0.55) uv.x += (hash(vec2(band, 3.7)) - 0.5) * 0.06 * uGlitch;
       }
       vec2 dir = uv - 0.5;
       float a = uAberr * 0.014 + uGlitch * 0.012;
@@ -54,8 +54,15 @@ const LATHE = {
   n: [[0, 0], [0.38, 0], [0.38, 0.07], [0.3, 0.12], [0.27, 0.2], [0, 0.2]],
 };
 const geoCache = {};
+// Weiche, gedrechselte Profile: Kontrollpunkte per Catmull-Rom glätten
 function lathe(type) {
-  return (geoCache[type] ||= new THREE.LatheGeometry(LATHE[type].map(([x, y]) => new THREE.Vector2(Math.max(x, 0.003), y)), 40));
+  if (geoCache[type]) return geoCache[type];
+  const pts = LATHE[type].map(([x, y]) => new THREE.Vector3(Math.max(x, 0.003), y, 0));
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+  const smooth = curve.getPoints(pts.length * 8).map((p) => new THREE.Vector2(Math.max(p.x, 0.003), Math.max(0, p.y)));
+  const g = new THREE.LatheGeometry(smooth, 72);
+  g.computeVertexNormals();
+  return (geoCache[type] = g);
 }
 function knightHead() {
   if (geoCache.nh) return geoCache.nh;
@@ -70,7 +77,7 @@ function makePiece(type, material) {
   const g = new THREE.Group();
   const add = (geo, y = 0, x = 0, z = 0) => { const m = new THREE.Mesh(geo, material); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m; };
   add(lathe(type));
-  if (type === 'p') add(new THREE.SphereGeometry(0.16, 24, 16), 0.6);
+  if (type === 'p') add(new THREE.SphereGeometry(0.16, 40, 28), 0.6);
   if (type === 'b') add(new THREE.SphereGeometry(0.05, 12, 8), 1.02);
   if (type === 'q') { add(new THREE.SphereGeometry(0.07, 16, 10), 1.0); for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; add(new THREE.SphereGeometry(0.045, 10, 8), 0.98, Math.cos(a) * 0.25, Math.sin(a) * 0.25); } }
   if (type === 'k') { add(new THREE.BoxGeometry(0.07, 0.28, 0.07), 1.17); add(new THREE.BoxGeometry(0.22, 0.07, 0.07), 1.2); }
@@ -81,11 +88,54 @@ function makePiece(type, material) {
 
 function skinMaterial(skinId, color) {
   const s = PIECES.find((p) => p.id === skinId) || PIECES[0];
-  const c = new THREE.Color().setStyle(s[color].fill[0]).lerp(new THREE.Color().setStyle(s[color].fill[1]), 0.55);
-  const m = new THREE.MeshStandardMaterial({ color: c, metalness: s.mat.metal, roughness: Math.max(0.18, s.mat.rough), envMapIntensity: 0.3 });
+  const c = new THREE.Color().setStyle(s[color].fill[0]).lerp(new THREE.Color().setStyle(s[color].fill[1]), color === 'b' ? 0.8 : 0.5);
+  // Lackiert: Klarlack-Schicht spiegelt die Umgebung, wirkt wie echte Turnierfiguren
+  const m = new THREE.MeshPhysicalMaterial({
+    color: c, metalness: s.mat.metal, roughness: Math.max(0.22, s.mat.rough), envMapIntensity: s.mat.metal > 0.5 ? 0.9 : 0.3,
+    clearcoat: s.mat.metal > 0.5 ? 0.3 : 0.7, clearcoatRoughness: 0.1,
+  });
   if (s.mat.opacity) { m.transparent = true; m.opacity = s.mat.opacity; }
   if (s.mat.emissive) { m.emissive = new THREE.Color().setStyle(s[color].stroke); m.emissiveIntensity = s.mat.emissive * 0.6; }
   return m;
+}
+
+// Prozedurale Feld-Texturen: Holzmaserung, Marmoradern oder feines Rauschen
+function squareTexture(themeId, baseColor, seed) {
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  let s = seed * 9301 + 49297;
+  const rnd = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  g.fillStyle = baseColor; g.fillRect(0, 0, S, S);
+  const wood = ['klassisch', 'smaragd', 'royal', 'lava'].includes(themeId);
+  const marble = ['marmor', 'eis'].includes(themeId);
+  if (wood) {
+    const ang = rnd() < 0.5 ? 0 : Math.PI / 2;
+    g.save(); g.translate(S / 2, S / 2); g.rotate(ang); g.translate(-S / 2, -S / 2);
+    for (let i = 0; i < 70; i++) {
+      const y = rnd() * S, amp = 2 + rnd() * 6, freq = 0.01 + rnd() * 0.02, ph = rnd() * 6;
+      g.strokeStyle = rnd() < 0.5 ? `rgba(0,0,0,${0.03 + rnd() * 0.07})` : `rgba(255,255,255,${0.02 + rnd() * 0.05})`;
+      g.lineWidth = 0.6 + rnd() * 2.2;
+      g.beginPath();
+      for (let x = -10; x <= S + 10; x += 8) g.lineTo(x, y + Math.sin(x * freq + ph) * amp);
+      g.stroke();
+    }
+    g.restore();
+  } else if (marble) {
+    for (let v = 0; v < 6; v++) {
+      let x = rnd() * S, y = 0;
+      g.strokeStyle = `rgba(${themeId === 'eis' ? '255,255,255' : '60,60,70'},${0.12 + rnd() * 0.2})`;
+      g.lineWidth = 0.6 + rnd() * 1.8;
+      g.beginPath(); g.moveTo(x, y);
+      while (y < S) { x += (rnd() - 0.5) * 26; y += 8 + rnd() * 14; g.lineTo(x, y); }
+      g.stroke();
+    }
+  }
+  const img = g.getImageData(0, 0, S, S), d = img.data;
+  for (let i = 0; i < d.length; i += 4) { const n = (rnd() - 0.5) * (wood ? 10 : 7); d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
 }
 
 function spriteTexture() {
@@ -197,7 +247,9 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     setTimeout(() => { overlay.remove(); done(); }, 2500);
     return;
   }
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const small = Math.min(innerWidth, innerHeight) < 820;
+  let pixelRatio = Math.min(devicePixelRatio, small ? 1.5 : 1.75);
+  renderer.setPixelRatio(pixelRatio);
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -223,10 +275,11 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   composer.addPass(new OutputPass());
 
   // Licht
-  const hemi = new THREE.HemisphereLight('#cfd8ff', '#20140a', 0.9); scene.add(hemi);
-  const key = new THREE.DirectionalLight('#fff3e0', 2.0);
+  const hemi = new THREE.HemisphereLight('#cfd8ff', '#20140a', 0.55); scene.add(hemi);
+  const key = new THREE.DirectionalLight('#fff3e0', 1.5);
   key.position.set(5, 11, 6); key.castShadow = true;
-  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.mapSize.set(small ? 1024 : 1536, small ? 1024 : 1536);
+  key.shadow.radius = 4;
   Object.assign(key.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 30 });
   key.shadow.bias = -0.0005;
   scene.add(key);
@@ -236,20 +289,32 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   // Brett
   const theme = BOARDS.find((b) => b.id === boardTheme) || BOARDS[0];
   const [lc, dc] = BOARD3D[theme.id] || [theme.light, theme.dark];
-  const lightMat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setStyle(lc), roughness: 0.55, metalness: 0.05, envMapIntensity: 0.2 });
-  const darkMat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setStyle(dc), roughness: 0.55, metalness: 0.05, envMapIntensity: 0.2 });
-  if (theme.id === 'neon') { darkMat.emissive = new THREE.Color('#0a0830'); lightMat.emissive = new THREE.Color('#14104a'); }
+  // Felder: Textur (Holz/Marmor/Rauschen) + leichter Klarlack, je 3 Varianten gegen Wiederholung
+  const sqMat = (col, seed) => {
+    const m = new THREE.MeshPhysicalMaterial({ map: squareTexture(theme.id, new THREE.Color().setStyle(col).getStyle(), seed), roughness: 0.42, metalness: 0.02, clearcoat: 0.55, clearcoatRoughness: 0.18, envMapIntensity: 0.35 });
+    if (theme.id === 'neon') { m.emissive = new THREE.Color(seed > 3 ? '#14104a' : '#0a0830'); }
+    return m;
+  };
+  const lightMats = [1, 2, 3].map((i) => sqMat(lc, i)), darkMats = [4, 5, 6].map((i) => sqMat(dc, i));
   const sqGeo = new THREE.BoxGeometry(1, 0.2, 1);
   const squares = [];
   const sqPos = (sq) => new THREE.Vector3(sq.charCodeAt(0) - 97 - 3.5, 0, 3.5 - (+sq[1] - 1));
   for (let f = 0; f < 8; f++) for (let r = 0; r < 8; r++) {
-    const m = new THREE.Mesh(sqGeo, (f + r) % 2 ? lightMat : darkMat);
+    const list = (f + r) % 2 ? lightMats : darkMats;
+    const m = new THREE.Mesh(sqGeo, list[(f * 7 + r * 3) % 3]);
     m.position.set(f - 3.5, 0, 3.5 - r); m.receiveShadow = true;
     scene.add(m); squares.push(m);
   }
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(8.9, 0.3, 8.9), new THREE.MeshStandardMaterial({ color: new THREE.Color().setStyle(theme.frame), roughness: 0.4, metalness: 0.3 }));
+  // Rahmen mit Goldeinlage
+  const frameMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color().setStyle(theme.frame), roughness: 0.35, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.15 });
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(9.1, 0.32, 9.1), frameMat);
   frame.position.y = -0.06; frame.receiveShadow = true; scene.add(frame);
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(40, 48), new THREE.MeshStandardMaterial({ color: '#0b0c12', roughness: 1 }));
+  const goldMat = new THREE.MeshStandardMaterial({ color: '#d4a84a', metalness: 1, roughness: 0.28, envMapIntensity: 1.2 });
+  for (const [w, d, x, z] of [[8.24, 0.06, 0, 4.12], [8.24, 0.06, 0, -4.12], [0.06, 8.24, 4.12, 0], [0.06, 8.24, -4.12, 0]]) {
+    const inlay = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), goldMat);
+    inlay.position.set(x, 0.105, z); scene.add(inlay);
+  }
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(40, 64), new THREE.MeshStandardMaterial({ color: '#0a0b11', roughness: 0.55, metalness: 0.2, envMapIntensity: 0.15 }));
   floor.rotation.x = -Math.PI / 2; floor.position.y = -0.22; floor.receiveShadow = true; scene.add(floor);
 
   // Figuren aus FEN
@@ -275,6 +340,12 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   const kingMat = mats[loserColor].clone();
   king.traverse((o) => { if (o.isMesh) o.material = kingMat; });
   const kingPos = sqPos(kingSq).setY(0.1);
+  // Dramatisches Spotlicht auf den König
+  const spot = new THREE.SpotLight('#ffe9c7', 16, 18, 0.42, 0.75, 1.4);
+  spot.position.set(kingPos.x + 1.5, 8, kingPos.z + 2);
+  spot.target.position.copy(kingPos);
+  spot.castShadow = !small; spot.shadow.mapSize.set(1024, 1024); spot.shadow.bias = -0.0004;
+  scene.add(spot, spot.target);
 
   const tex = spriteTexture();
   const parts = new Particles(scene, 6000, tex, 0.16);
@@ -285,23 +356,28 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   const winnerSide = loserColor === 'w' ? 'b' : 'w';
   const baseAngle = (winnerSide === 'w' ? 0 : Math.PI) + 0.55;
   const cam = { look: kingPos.clone().setY(0.7), lookY: 0, shake: 0, distEnd: 3.8, heightEnd: 2.1, orbit: 0.06 };
-  let shakeT = 0, shakeAmp = 0;
-  const shake = (amp, dur) => { shakeAmp = amp; shakeT = dur; };
-  const flash = (alpha = 0.9, color = '#fff') => {
-    flashEl.style.transition = 'none'; flashEl.style.background = color; flashEl.style.opacity = alpha;
-    requestAnimationFrame(() => { flashEl.style.transition = 'opacity .6s ease-out'; flashEl.style.opacity = 0; });
+  // Sanftes, filmisches Wackeln (überlagerte Sinuswellen statt Zufallszittern)
+  let shakeT = 0, shakeDur = 1, shakeAmp = 0;
+  const shake = (amp, dur) => {
+    const cur = shakeAmp * (Math.max(0, shakeT) / shakeDur) ** 2;
+    if (amp * 0.6 >= cur) { shakeAmp = amp * 0.6; shakeT = dur; shakeDur = dur; }
+  };
+  // Blitze gedämpft: nie mehr als halbe Deckkraft, weich ausblenden
+  const flash = (alpha = 0.5, color = '#fff') => {
+    flashEl.style.transition = 'none'; flashEl.style.background = color; flashEl.style.opacity = Math.min(0.3, alpha * 0.45);
+    requestAnimationFrame(() => { flashEl.style.transition = 'opacity .9s ease-out'; flashEl.style.opacity = 0; });
   };
   const hide = (o) => { o.visible = false; };
 
   // Impact-System: Aberration, Zeitlupe, Impact-Frame, FOV-Punch, Titel-Wackeln, Speedlines
   const fx = { aberr: 0, invertT: 0, slowRecover: 0, fovKick: 0 };
   const base = { aberr: 0, glitch: 0 };
-  const impact = (str = 1, { invert = str >= 0.8, slow = str >= 0.8 } = {}) => {
-    fx.aberr = Math.max(fx.aberr, 1.8 * str);
-    fx.fovKick = Math.min(fx.fovKick, -7 * str);
-    shake(0.18 * str + 0.06, 0.45 + 0.4 * str);
-    flash(Math.min(1, 0.45 + 0.45 * str));
-    if (invert) fx.invertT = 0.085;
+  const impact = (str = 1, { invert = false, slow = str >= 0.8 } = {}) => {
+    fx.aberr = Math.max(fx.aberr, 0.8 * str);
+    fx.fovKick = Math.min(fx.fovKick, -4 * str);
+    shake(0.1 * str + 0.03, 0.6 + 0.4 * str);
+    flash(0.12 + 0.2 * str);
+    if (invert) fx.invertT = 0.06;
     if (slow) { ctx.timeScale = 0.22; fx.slowRecover = 1; }
     overlay.classList.remove('hit'); void overlay.offsetWidth; overlay.classList.add('hit');
   };
@@ -331,6 +407,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   addEventListener('resize', onResize);
 
   const tmp = new THREE.Vector3();
+  const perf = { n: 0, sum: 0, done: false };
   function frameLoop(now) {
     raf = requestAnimationFrame(frameLoop);
     const realDt = Math.min(0.1, (now - last) / 1000); last = now;
@@ -342,12 +419,22 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
 
     effect.update(t, dt, realDt);
     // Filter & Zeitlupe
-    fx.aberr *= Math.exp(-realDt * 3.2);
-    fx.fovKick *= Math.exp(-realDt * 3.5);
+    fx.aberr *= Math.exp(-realDt * 2.5);
+    fx.fovKick *= Math.exp(-realDt * 2.5);
+    // Automatische Qualität: bei Ruckeln die Auflösung senken
+    if (t > 0.6 && !perf.done) {
+      perf.n++; perf.sum += realDt;
+      if (perf.n === 40) {
+        perf.done = true;
+        const fps = perf.n / perf.sum;
+        if (fps < 42 && pixelRatio > 1) { pixelRatio = 1; renderer.setPixelRatio(1); composer.setPixelRatio?.(1); onResize(); }
+        if (fps < 28) { bloom.resolution?.set(innerWidth / 2, innerHeight / 2); spot.castShadow = false; }
+      }
+    }
     if (fx.invertT > 0) fx.invertT -= realDt;
     if (fx.slowRecover && ctx.timeScale < 1) ctx.timeScale = Math.min(1, ctx.timeScale + realDt * 0.9);
     fxPass.uniforms.uTime.value = now / 1000;
-    fxPass.uniforms.uAberr.value = fx.aberr + base.aberr + 0.12;
+    fxPass.uniforms.uAberr.value = fx.aberr + base.aberr * 0.6 + 0.05;
     fxPass.uniforms.uGlitch.value = base.glitch;
     fxPass.uniforms.uInvert.value = fx.invertT > 0 ? 1 : 0;
     parts.update(dt); bigParts.update(dt); debris.update(dt);
@@ -361,7 +448,12 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     camera.updateProjectionMatrix();
     camera.position.set(kingPos.x + Math.sin(ang) * dist, h, kingPos.z + Math.cos(ang) * dist);
     tmp.set(0, 0, 0).lerp(cam.look, p); tmp.y += cam.lookY;
-    if (shakeT > 0) { shakeT -= realDt; const a = shakeAmp * Math.max(0, shakeT); camera.position.x += rand(-a, a); camera.position.y += rand(-a, a); }
+    if (shakeT > 0) {
+      shakeT -= realDt;
+      const a = shakeAmp * (Math.max(0, shakeT) / shakeDur) ** 2, s = now / 1000;
+      camera.position.x += a * (Math.sin(s * 21) * 0.6 + Math.sin(s * 34 + 1.3) * 0.4);
+      camera.position.y += a * (Math.sin(s * 25 + 2.1) * 0.6 + Math.sin(s * 39 + 0.4) * 0.4);
+    }
     camera.lookAt(tmp);
     composer.render();
   }
@@ -521,7 +613,7 @@ const EFFECTS = {
           bigParts.spawn(rock.position, V(0, 0, 0), C('#ff5a00').multiplyScalar(0.6), 0.25);
           if (p >= 1) {
             impact = true; impactT = t; rock.visible = false; king.visible = false;
-            sound.boom(); ctx.flash(1, '#ffe2b0'); ctx.shake(0.45, 0.9); ctx.impact(1.5);
+            sound.boom(); ctx.flash(1, '#ffe2b0'); ctx.impact(1.3);
             ctx.fxLight.position.set(kingPos.x, 1, kingPos.z); ctx.fxLight.intensity = 260;
             debris.burst(kingPos, kingMat, 40, { speed: 5, up: 6 });
             debris.burst(kingPos, rock.material, 16, { speed: 4, up: 5, size: [0.08, 0.2] });
@@ -719,7 +811,7 @@ Object.assign(EFFECTS, {
           const g = ease.out(seg(t, 3.08, 3.25)) * (1 + Math.sin(t * 50) * 0.06);
           core.scale.set(g, 1, g); glow.scale.set(g * (1.2 + Math.sin(t * 23) * 0.15), 1, g * (1.2 + Math.sin(t * 23) * 0.15));
           ctx.fxLight.intensity = 110; ctx.base.aberr = 0.5;
-          ctx.shake(0.08, 0.15);
+          ctx.shake(0.035, 0.2);
           for (let i = 0; i < 18; i++) parts.spawn(V(kingPos.x + rand(-0.3, 0.3), rand(0.2, 3), kingPos.z + rand(-0.3, 0.3)), V(rand(-0.5, 0.5), rand(4, 12), rand(-0.5, 0.5)), C('#bff6ff').multiplyScalar(1.6), rand(0.3, 0.8));
           for (let i = 0; i < 26; i++) { const a = Math.random() * 6.28; parts.spawn(V(kingPos.x + Math.cos(a) * 0.5, 0.15, kingPos.z + Math.sin(a) * 0.5), V(Math.cos(a) * rand(3, 9), rand(0.5, 3), Math.sin(a) * rand(3, 9)), C(i % 2 ? '#ffb347' : '#fff1c1').multiplyScalar(1.5), rand(0.3, 0.9), 6, 1); }
           kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.set('#e8fbff'); kingMat.emissiveIntensity = seg(t, 3.08, 3.4) * 4;
@@ -784,7 +876,7 @@ Object.assign(EFFECTS, {
         }
         g.attributes.position.needsUpdate = true;
         if (t > 1.8 && t < 4.9) {
-          ctx.shake(0.035 * grow, 0.12);
+          ctx.shake(0.02 * grow, 0.2);
           for (let i = 0; i < 6; i++) { const a = Math.random() * 6.28, r = rand(0.8, 2.6); parts.spawn(V(kingPos.x + Math.cos(a) * r, 0.15, kingPos.z + Math.sin(a) * r), V(-Math.sin(a) * 4 - Math.cos(a) * 2, rand(0.5, 2.5), Math.cos(a) * 4 - Math.sin(a) * 2), C('#bfae92').multiplyScalar(0.5), rand(0.5, 1.1)); }
         }
         if (!flung) {
@@ -902,19 +994,21 @@ Object.assign(EFFECTS, {
         if (t > 1.9 && !s1) { s1 = true; sound.glitch(); }
         if (t > 2.6 && !s2) { s2 = true; sound.glitch(); }
         if (t > 1.8 && t < 3.05) {
-          const spike = Math.random() < 0.12;
-          ctx.base.glitch = 0.12 + (spike ? 0.5 : 0) + seg(t, 2.4, 3.05) * 0.3;
-          kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.copy(green); kingMat.emissiveIntensity = spike ? 1.5 : 0.3;
-          kingMat.wireframe = Math.random() < 0.25;
-          kingMat.color.copy(Math.random() < 0.2 ? green : baseColor);
-          king.position.set(kingPos.x + (spike ? rand(-0.12, 0.12) : 0), kingPos.y, kingPos.z + (spike ? rand(-0.12, 0.12) : 0));
-          king.scale.set(1 + (spike ? rand(-0.2, 0.3) : 0), 1, 1);
+          // Glitch-Zustände wechseln nur alle ~0,15 s statt jedes Bild (weniger Flackern)
+          const slot = Math.floor(t / 0.15);
+          if (slot !== this.slot) { this.slot = slot; this.spike = Math.random() < 0.3; this.wire = Math.random() < 0.3; this.off = rand(-0.06, 0.06); }
+          const spike = this.spike;
+          ctx.base.glitch = 0.05 + (spike ? 0.15 : 0) + seg(t, 2.4, 3.05) * 0.12;
+          kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.copy(green); kingMat.emissiveIntensity = spike ? 1.2 : 0.35;
+          kingMat.wireframe = this.wire;
+          kingMat.color.copy(spike ? green : baseColor);
+          king.position.set(kingPos.x + (spike ? this.off : 0), kingPos.y, kingPos.z);
         }
         if (t >= 3.05 && !broke) {
           broke = true; king.visible = false; inst.visible = true; ctx.impact(1.1); sound.glitch(); sound.boom();
         }
         if (broke) {
-          ctx.base.glitch = Math.max(0, 0.9 * (1 - seg(t, 3.05, 5.4)));
+          ctx.base.glitch = Math.max(0, 0.4 * (1 - seg(t, 3.05, 5.0)));
           if (t > 4.3 && !burst2) { burst2 = true; ctx.impact(0.7, { slow: false }); sound.glitch(); }
           const k0 = t - 3.05;
           vox.forEach((v, i) => {
