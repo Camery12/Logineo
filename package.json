@@ -1,0 +1,17 @@
+{
+  "name": "schach-arena",
+  "version": "1.0.0",
+  "description": "Online-Schach mit Einladungscodes, Matchmaking, Bots, Shop und 3D-Finishern",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "three": "^0.170.0"
+  }
+}
