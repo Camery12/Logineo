@@ -74,7 +74,15 @@ socket.on('connect', async () => {
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
   if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
-  if (!state.booted) { state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); warmFinisherLater(); }
+  if (!state.booted) {
+    state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); warmFinisherLater();
+    const join = new URLSearchParams(location.search).get('join');
+    if (join && /^\d{6,8}$/.test(join)) {
+      history.replaceState(null, '', location.pathname + location.hash);
+      go('play');
+      setTimeout(() => { const inp = $('#join-input'); if (inp) { inp.value = join; joinCode(); } }, 300);
+    }
+  }
   // Laufende Partie gibt es auf dem Server nicht mehr (sollte praktisch nie passieren)
   if (state.game?.active && r.gameId !== state.game.id) {
     state.game.active = false; clearInterval(state.oppTimer); setBanner(''); renderOnline();
@@ -450,28 +458,48 @@ function renderRandomCard() {
   }
 }
 
+const inviteLink = (code) => `${location.origin}/?join=${code}`;
 function renderInviteCard() {
   const el = $('#card-invite'); if (!el) return;
   if (state.room) {
-    el.innerHTML = `<div class="ic">✉️</div><h3>Dein Einladungscode</h3>
-      <p>Schick diesen Code deinem Freund. Das Spiel startet, sobald er ihn eingibt.</p>
-      ${codeDigits(state.room)}
+    const queens = state.roomVariant === 'queens';
+    const hidden = !!state.codeHidden;
+    el.innerHTML = `<div class="ic">${queens ? '👑' : '✉️'}</div><h3>Private Lobby ${queens ? '<span class="tag queen-tag">👑 Queen-Modus</span>' : ''}</h3>
+      <p>Schick deinem Freund den Code oder den Link. Das Spiel startet, sobald er beitritt.</p>
+      <div class="code-wrap ${hidden ? 'hidden-code' : ''}">${codeDigits(state.room)}<button class="code-eye" id="room-eye" title="${hidden ? 'Code anzeigen' : 'Code verstecken'}">${hidden ? '👁️ Code anzeigen' : '🙈'}</button></div>
       <div class="searching" style="flex-direction:row;justify-content:center;padding:0"><span class="spinner"></span><span class="muted">Warte auf Gegner…</span></div>
-      <div style="display:flex;gap:8px"><button class="btn block" id="room-copy">📋 Kopieren</button><button class="btn danger" id="room-cancel">✕</button></div>`;
+      <div class="room-actions"><button class="btn" id="room-big">🔍 Groß zeigen</button><button class="btn" id="room-copy">📋 Code</button><button class="btn" id="room-link">🔗 Link</button><button class="btn danger" id="room-cancel">✕ Schließen</button></div>`;
+    $('#room-eye').onclick = () => { state.codeHidden = !hidden; renderInviteCard(); };
     $('#room-copy').onclick = () => copy(state.room, 'Einladungscode kopiert!');
+    $('#room-link').onclick = () => copy(inviteLink(state.room), 'Einladungslink kopiert – einfach schicken!');
+    $('#room-big').onclick = () => showBigCode(state.room, queens);
     $('#room-cancel').onclick = () => { socket.emit('room:cancel'); state.room = null; renderInviteCard(); };
   } else {
-    el.innerHTML = `<div class="ic">✉️</div><h3>Freund einladen</h3>
-      <p>Erzeuge einen zufälligen Zahlen-Code und teile ihn mit einem Freund.</p>
-      <div class="seg" id="time-seg">${TIMES.map(([v, l]) => `<button data-t="${v}" class="${v === state.roomTime ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <button class="btn primary block" id="room-btn">🔐 Code erstellen</button>`;
+    const v = state.roomVariant || null;
+    el.innerHTML = `<div class="ic">✉️</div><h3>Private Lobby</h3>
+      <p>Erzeuge einen Code und spiel mit einem Freund – auch im Queen-Modus.</p>
+      <div class="seg mode-seg" id="mode-seg"><button data-v="" class="${!v ? 'on' : ''}">♟️ Normal</button><button data-v="queens" class="${v === 'queens' ? 'on' : ''}">👑 Queen-Modus</button></div>
+      ${v === 'queens' ? '<p class="muted small" style="margin:0">Beide haben nur Damen (außer dem König). Zählt nicht für Elo.</p>' : ''}
+      <div class="seg" id="time-seg">${TIMES.map(([t, l]) => `<button data-t="${t}" class="${t === state.roomTime ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <button class="btn primary block" id="room-btn">🔐 Lobby erstellen</button>`;
+    $$('#mode-seg button').forEach((b) => b.onclick = () => { state.roomVariant = b.dataset.v || null; renderInviteCard(); });
     $$('#time-seg button').forEach((b) => b.onclick = () => { state.roomTime = +b.dataset.t; renderInviteCard(); });
     $('#room-btn').onclick = async () => {
-      const r = await emit('room:create', { timeMs: state.roomTime });
+      const r = await emit('room:create', { timeMs: state.roomTime, variant: state.roomVariant || null });
       if (r.error) return toast(esc(r.error), 'warn');
-      state.room = r.code; renderInviteCard(); sound.notify();
+      state.room = r.code; state.roomVariant = r.variant || null; renderInviteCard(); sound.notify();
     };
   }
+}
+// Code riesig anzeigen (z. B. um ihn im Klassenzimmer zu zeigen)
+function showBigCode(code, queens) {
+  const ov = openOverlay(`<div class="big-code">
+    <div class="muted">${queens ? '👑 Queen-Modus · ' : ''}Einladungscode</div>
+    <div class="big-digits">${[...code].map((d, i) => `<span style="animation-delay:${i * 70}ms">${d}</span>`).join('')}</div>
+    <div class="muted small">oder Link öffnen: <b>${esc(inviteLink(code).replace(/^https?:\/\//, ''))}</b></div>
+    <div class="modal-actions"><button class="btn" data-l>🔗 Link kopieren</button><button class="btn primary" data-x>Fertig</button></div></div>`, { wide: true });
+  $('[data-x]', ov.el).onclick = ov.close;
+  $('[data-l]', ov.el).onclick = () => copy(inviteLink(code), 'Einladungslink kopiert!');
 }
 
 // Eingehende Herausforderung
@@ -539,7 +567,7 @@ function closeVote() { if (voteOv) { voteOv.close(); voteOv = null; } }
 // ================================================================ Gemeinsame Spielansicht
 const board = new Board($('#board'), {
   canMove: (c) => {
-    if (state.game?.active) return c === state.game.you;
+    if (state.game?.active) return c === state.game.you && !state.game.clock?.paused;
     if (state.bot && !state.bot.over && !state.bot.thinking) return c === state.bot.color;
     return false;
   },
@@ -617,7 +645,7 @@ function countPieces(fen) {
 function captured(fen) {
   const vals = { p: 1, n: 3, b: 3, r: 5, q: 9 };
   const cnt = countPieces(fen);
-  const start = countPieces(!state.game && state.bot?.startFen ? state.bot.startFen : START_FEN);
+  const start = countPieces((state.game ? state.game.startFen : state.bot?.startFen) || START_FEN);
   const mat = (c) => Object.entries(cnt[c]).reduce((s, [t, n]) => s + n * vals[t], 0);
   // Von Farbe c geschlagene Figuren = fehlende gegnerische Figuren (gemessen an der Startstellung)
   const taken = (c) => { const o = c === 'w' ? 'b' : 'w'; const out = []; for (const t of ['q', 'r', 'b', 'n', 'p']) for (let i = cnt[o][t]; i < start[o][t]; i++) out.push([t, o]); return out; };
@@ -723,7 +751,7 @@ socket.on('game:start', (d) => {
   $$('.overlay').forEach((o) => o.remove());
   state.bot = null;
   state.searching = false; state.room = null;
-  const g = state.game = { ...d, active: true, sans: d.moves.map((m) => m.san), clockAt: performance.now(), marks: {}, fens: [], anaChess: new Chess() };
+  const g = state.game = { ...d, active: true, sans: d.moves.map((m) => m.san), clockAt: performance.now(), marks: {}, fens: [], anaChess: d.startFen ? new Chess(d.startFen) : new Chess() };
   for (const m of d.moves) { g.fens.push(g.anaChess.fen()); try { g.anaChess.move(m.san); } catch { /* egal */ } }
   setupBoardLook(d.board, d.skins, d.you);
   const last = d.moves.at(-1);
@@ -736,6 +764,7 @@ socket.on('game:start', (d) => {
     const b = findItem('board', d.board);
     toast(`♟️ Brett: <b>${esc(b?.name)}</b> · ${DECISIONS[d.boardDecision] || ''}`, 'good');
     toast(`Du spielst <b>${d.you === 'w' ? 'Weiß' : 'Schwarz'}</b>`);
+    if (d.variant === 'queens') toast('👑 <b>Queen-Modus!</b> Alle Figuren sind Damen.', 'good');
   } else toast('Spiel fortgesetzt', 'good');
   if (d.drawOffer && d.drawOffer !== d.you) showDrawOffer();
 });
@@ -750,7 +779,8 @@ function renderOnline() {
   $('#bar-top').classList.toggle('turn', g.active && turn === opp);
   $('#bar-bottom').classList.toggle('turn', g.active && turn === g.you);
   renderMoves(g.sans);
-  if (g.active) setStatus(turn === g.you ? '🟢 Du bist am Zug' + (board.chess.inCheck() ? ' – <span style="color:var(--bad)">Schach!</span>' : '') : `⏳ ${esc(g.players[opp].name)} ist am Zug`);
+  if (g.active && g.clock?.paused) setStatus('⏸️ Pausiert – warte auf deinen Gegner…');
+  else if (g.active) setStatus(turn === g.you ? '🟢 Du bist am Zug' + (board.chess.inCheck() ? ' – <span style="color:var(--bad)">Schach!</span>' : '') : `⏳ ${esc(g.players[opp].name)} ist am Zug`);
   $('#game-actions').innerHTML = g.active
     ? `<button class="btn" id="draw-btn" ${g.drawOffer === g.you ? 'disabled' : ''}>🤝 Remis</button><button class="btn danger" id="resign-btn">🏳️ Aufgeben</button>
        <button class="btn" id="flip-btn" style="grid-column:1/-1">🔄 Brett drehen</button>`
@@ -824,7 +854,7 @@ socket.on('game:state', (s) => {
   renderOnline();
   if (s.drawOffer && s.drawOffer !== g.you && prevOffer !== s.drawOffer) showDrawOffer();
   if (!s.drawOffer) setBanner('');
-  if (s.resumedAfterUpdate) { clearInterval(state.oppTimer); toast('▶️ Weiter geht\'s – beide sind wieder da!', 'good'); }
+  if (s.resumed || s.resumedAfterUpdate) { clearInterval(state.oppTimer); setBanner(''); toast('▶️ Weiter geht\'s – beide sind wieder da!', 'good'); }
   if (s.drawDeclined && g.drawOffer == null && prevOffer === g.you) toast('Remisangebot abgelehnt', 'warn');
 });
 
@@ -836,7 +866,7 @@ function showDrawOffer() {
   $('#dd').onclick = () => { socket.emit('game:draw', { action: 'decline' }); setBanner(''); };
 }
 
-socket.on('game:opponent', ({ online, deadline, update }) => {
+socket.on('game:opponent', ({ online, deadline, update, paused }) => {
   if (!state.game?.active) return;
   clearInterval(state.oppTimer);
   if (online) { setBanner(''); toast('Gegner ist wieder da', 'good'); return; }
@@ -845,7 +875,9 @@ socket.on('game:opponent', ({ online, deadline, update }) => {
     if (s <= 0) clearInterval(state.oppTimer);
     setBanner(update
       ? `<div>⏸️ Kurze Pause wegen Update – warte auf deinen Gegner (<b>${s}s</b>). Die Uhr steht still.</div>`
-      : `<div>📡 Dein Gegner hat die Verbindung verloren. Sieg in <b>${s}s</b>, falls er nicht zurückkommt.</div>`);
+      : paused
+        ? `<div>⏸️ <b>Spiel pausiert</b> – dein Gegner hat keine Verbindung. Die Uhr steht. Kommt er in <b>${s}s</b> nicht zurück, verliert er.</div>`
+        : `<div>📡 Dein Gegner hat die Verbindung verloren. Sieg in <b>${s}s</b>, falls er nicht zurückkommt.</div>`);
   };
   upd(); state.oppTimer = setInterval(upd, 1000);
 });
@@ -878,7 +910,7 @@ socket.on('game:over', async (d) => {
   }
   if (d.reason === 'resign') await throwBoard();
   setProfile(d.profile, { coinsAnim: true });
-  showResult({ outcome: d.outcome, reason: d.reason, coins: d.coins, rating: d.ratingChange, online: true });
+  showResult({ outcome: d.outcome, reason: d.reason, coins: d.coins, rating: d.ratingChange, online: true, unrated: d.unrated, variant: d.variant });
 });
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -893,7 +925,7 @@ async function throwBoard() {
   board.load(board.fen, board.lastMove, false);
 }
 
-function showResult({ outcome, reason, coins, rating, online, bot, training = false }) {
+function showResult({ outcome, reason, coins, rating, online, bot, training = false, unrated = null, variant = null }) {
   if (reason === 'abandon' && outcome === 'win') {
     // Gegner hat das Spiel verlassen: keine Wertung für den, der bleibt
     sound.notify();
@@ -912,6 +944,7 @@ function showResult({ outcome, reason, coins, rating, online, bot, training = fa
       ${training ? `<span class="pill">${training === 'queens' ? '👑 Queen-Modus – nur zum Spaß' : '🎓 Training – ohne Münzen'}</span>` : `<span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${coins}</b> ${coinLabel}</span>`}
       ${online ? `<span class="pill" style="color:${rating >= 0 ? 'var(--good)' : 'var(--bad)'}"><b>${rating >= 0 ? '+' : ''}${rating}</b> Elo</span>` : ''}
     </div>
+    ${unrated ? `<div class="unrated">⚖️ <b>Nicht gewertet</b><span>${esc(unrated)}</span></div>` : variant === 'queens' ? '<p class="muted" style="text-align:center;font-size:13px;margin-top:12px">👑 Queen-Modus zählt nicht für Elo.</p>' : ''}
     ${outcome === 'win' && reason === 'checkmate' ? '' : outcome === 'win' ? '<p class="muted" style="text-align:center;font-size:13px;margin-top:16px">Tipp: Gewinne per Schachmatt, um deinen 3D-Finisher zu sehen!</p>' : ''}
     <div class="modal-actions">
       ${online ? '<button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">⚡ Neues Match</button>'
@@ -1184,15 +1217,17 @@ function renderShop() {
       const { price, full, missing } = bundlePrice(bd, p.owned);
       const [[, bId], [, pId], [, fId]] = bd.items;
       const names = bd.items.map(([k, id]) => findItem(k, id)).map((it) => `<li>${esc(it.name)} <span class="muted">${fmtNum(it.price)}</span></li>`).join('');
-      const card = html(`<div class="card shop-item bundle ${!missing.length ? 'equipped' : ''}">
+      const card = html(`<div class="card shop-item bundle ${!missing.length ? 'equipped' : ''} ${bd.isNew ? 'ultra' : ''}">
         <span class="ribbon">${bd.discount >= 1 ? 'GRATIS' : `-${Math.round(bd.discount * 100)} %`}</span>
-        <div class="prev bundle-prev"><div class="bp-board"></div><div class="bp-fin">${findItem('finisher', fId).icon}</div></div>
+        ${bd.isNew ? '<span class="ribbon new">NEU · ULTRA</span>' : ''}
+        <div class="prev bundle-prev"><div class="bp-board"></div><button class="bp-fin" title="Finisher-Vorschau">${findItem('finisher', fId).icon}<small>▶ Vorschau</small></button></div>
         <h4>${bd.icon} ${esc(bd.name)}</h4><p>${esc(bd.desc)}</p><ul class="bundle-list">${names}</ul>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
           ${missing.length ? `<span><s class="muted small">${fmtNum(full)}</s> ${price === 0 ? '<b style="color:var(--good)">Kostenlos</b>' : coinHTML(price)}</span>` : '<span class="muted small">✔ Alles freigeschaltet</span>'}
           ${missing.length ? `<button class="btn sm ${price === 0 ? 'good' : 'gold'}" data-bundle ${p.coins < price ? 'disabled' : ''}>${price === 0 ? '🎁 Gratis holen' : 'Paket kaufen'}</button>` : ''}
         </div></div>`);
       $('.bp-board', card).appendChild(miniBoard(bId, { w: pId, b: pId }));
+      $('.bp-fin', card).onclick = () => previewFinisher(fId);
       const btn = $('[data-bundle]', card);
       if (btn) btn.onclick = () => {
         const ov = openOverlay(`<h2>${bd.icon} ${esc(bd.name)} kaufen?</h2><p class="muted">Du bekommst ${missing.length === bd.items.length ? 'alle drei Teile' : 'die fehlenden Teile'} und rüstest sie direkt aus.</p>
@@ -1225,7 +1260,7 @@ function renderShop() {
     if (tab === 'board') prev.appendChild(miniBoard(it.id, { w: p.equipped.pieces, b: p.equipped.pieces }));
     if (tab === 'pieces') prev.appendChild(miniBoard(p.equipped.board, { w: it.id, b: it.id }, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'));
     if (tab === 'finisher') {
-      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff', midas: '#ffc53d', ak: '#ff8a3a', feuersturm: '#ff4a1a', rakete: '#ff9a3a', ufo: '#7fff9a', supernova: '#cfe8ff', portal: '#9a7cff', krake: '#b46cff', bowling: '#5a3cff', schwerkraft: '#8ab4ff', shuriken: '#d7dde4', lawine: '#e8f4ff' };
+      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff', midas: '#ffc53d', ak: '#ff8a3a', feuersturm: '#ff4a1a', rakete: '#ff9a3a', ufo: '#7fff9a', supernova: '#cfe8ff', portal: '#9a7cff', krake: '#b46cff', bowling: '#5a3cff', schwerkraft: '#8ab4ff', shuriken: '#d7dde4', lawine: '#e8f4ff', viertewand: '#bfe9ff', riss: '#ff4fd8' };
       prev.style.padding = '0';
       prev.innerHTML = `<div class="fin-prev" style="--fc:${colors[it.id]}"><span>${it.icon}</span><button class="btn sm">▶ Vorschau</button></div>`;
       $('button', prev).onclick = () => previewFinisher(it.id);

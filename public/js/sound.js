@@ -50,5 +50,8 @@ export const sound = {
   slash() { tone({ freq: 5000, noise: true, dur: 0.18, vol: 0.7 }); tone({ freq: 1800, type: 'sawtooth', dur: 0.14, vol: 0.08, slide: -1500 }); },
   clink() { tone({ freq: 2637, type: 'triangle', dur: 0.5, vol: 0.12 }); tone({ freq: 3951, type: 'sine', dur: 0.4, vol: 0.06, delay: 0.02 }); },
   glitch() { for (let i = 0; i < 7; i++) tone({ freq: 200 + Math.random() * 1800, type: 'square', dur: 0.04, vol: 0.05, delay: i * 0.035 }); },
+  glass() { for (let i = 0; i < 14; i++) tone({ freq: 2500 + Math.random() * 5000, noise: true, dur: 0.22, vol: 0.32, delay: i * 0.022 }); tone({ freq: 140, type: 'sine', dur: 0.5, vol: 0.4, slide: -70 }); tone({ freq: 3136, type: 'triangle', dur: 0.6, vol: 0.06, delay: 0.05 }); },
+  rift() { tone({ freq: 55, type: 'sawtooth', dur: 2.2, vol: 0.16, slide: 220 }); tone({ freq: 700, noise: true, dur: 2.0, vol: 0.28 }); tone({ freq: 1400, type: 'sine', dur: 1.8, vol: 0.05, slide: -1100 }); },
+  bang() { tone({ freq: 60, noise: true, dur: 1.4, vol: 0.9 }); tone({ freq: 45, type: 'sine', dur: 1.5, vol: 0.5, slide: -25 }); tone({ freq: 2200, type: 'sine', dur: 0.9, vol: 0.06, slide: -1800 }); },
   thud() { tone({ freq: 110, type: 'sine', dur: 0.25, vol: 0.35, slide: -50 }); tone({ freq: 400, noise: true, dur: 0.15, vol: 0.3 }); },
 };

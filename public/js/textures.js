@@ -111,6 +111,38 @@ const KINDS = {
       return mix(mix(base.map((c) => c * 0.85), base, depth), acc, light * 0.75);
     });
   },
+  // Zerbrochenes Displayglas: Scherben mit eigener Tönung, feine helle Bruchkanten, Spiegelungen
+  shards(spec, N) {
+    const base = hex(spec.base), acc = hex(spec.accent), deep = hex(spec.deep || spec.base);
+    const pts = Array.from({ length: 26 }, () => [N.rnd(), N.rnd(), N.rnd()]);
+    return pixelCanvas((u, v) => {
+      let d1 = 9, d2 = 9, id = 0;
+      for (const [px, py, pr] of pts) {
+        const dx = Math.min(Math.abs(u - px), 1 - Math.abs(u - px)), dy = Math.min(Math.abs(v - py), 1 - Math.abs(v - py));
+        const d = dx * dx + dy * dy;
+        if (d < d1) { d2 = d1; d1 = d; id = pr; } else if (d < d2) d2 = d;
+      }
+      const edge = Math.sqrt(d2) - Math.sqrt(d1);
+      const line = Math.pow(clamp01(1 - edge * 60), 3);
+      const tint = mix(deep, base, 0.3 + id * 0.7);
+      const sheen = Math.pow(clamp01(Math.sin((u * 0.9 + v * 1.5 + id * 2) * Math.PI * 2) * 0.5 + 0.5), 10) * 0.45;
+      return mix(mix(tint, acc, sheen), acc, line * 0.95);
+    });
+  },
+  // Leere zwischen den Dimensionen: dunkler Nebel, hauchdünne leuchtende Risse, Sterne
+  rift(spec, N) {
+    const base = hex(spec.base), acc = hex(spec.accent), acc2 = hex(spec.accent2 || spec.accent), deep = hex(spec.deep || '#000000');
+    return pixelCanvas((u, v) => {
+      const x = u * 3, y = v * 3;
+      const w = N.fbm(x + 3.1, y + 1.7, 4) * 1.5;
+      const n = N.fbm(x + w, y - w, 5);
+      const vein = Math.pow(1 - Math.abs(Math.sin((n * 4 + u * 1.2) * Math.PI)), 26);
+      const neb = clamp01(N.fbm(x * 0.7, y * 0.7, 3) * 0.9 + 0.45);
+      let c = mix(deep, base, neb);
+      c = mix(c, mix(acc, acc2, clamp01(N.fbm(u * 2 + 9, v * 2, 2) + 0.5)), clamp01(vein * 1.4));
+      return N.rnd() > 0.996 ? mix(c, [255, 255, 255], 0.85) : c;
+    });
+  },
   noise(spec, N) {
     const base = hex(spec.base), acc = hex(spec.accent);
     return pixelCanvas((u, v) => mix(base, acc, clamp01(0.5 + N.fbm(u * 5, v * 5, 4) * 0.7)));

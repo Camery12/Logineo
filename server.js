@@ -15,7 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'db.json');
 const VOTE_MS = 12000;
-const RECONNECT_MS = 45000;
+const RECONNECT_MS = 60000;   // so lange ist ein Spiel pausiert, bevor "Verlassen" zählt
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const VARIANTS = { queens: 'qqqqkqqq/qqqqqqqq/8/8/8/8/QQQQQQQQ/QQQQKQQQ w - - 0 1' }; // Queen-Modus: alles Damen außer den Königen
 const RESTORE_MS = 90_000;      // nach einem Update: so lange haben beide Zeit, zurückzukommen
 const BOOT = Date.now();
 const freshBoot = () => Date.now() - BOOT < 20 * 60_000;
@@ -251,7 +253,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 5_000_000 }); // genug für Profilsongs
+// schnellere Erkennung von Verbindungsabbrüchen (z. B. iPad-Tab im Hintergrund)
+const io = new Server(server, { maxHttpBufferSize: 5_000_000, pingInterval: 10_000, pingTimeout: 9_000 });
 
 const online = new Map();      // userId -> socket
 const games = new Map();       // gameId -> game
@@ -283,10 +286,11 @@ function gamePayload(g, uid) {
     players: { w: pub(db.users[g.players.w]), b: pub(db.users[g.players.b]) },
     skins: { w: db.users[g.players.w].equipped.pieces, b: db.users[g.players.b].equipped.pieces },
     clock: clockState(g), timeMs: g.timeMs, drawOffer: g.drawOffer, boardDecision: g.boardDecision,
+    variant: g.variant || null, startFen: g.startFen || null,
   };
 }
 
-function startMatch(aId, bId, timeMs, source) {
+function startMatch(aId, bId, timeMs, source, variant = null) {
   if (aId === bId || userGame.has(aId) || userGame.has(bId)) return false;
   queue = queue.filter((q) => q.userId !== aId && q.userId !== bId);
   for (const [code, r] of rooms) if (r.hostId === aId || r.hostId === bId) rooms.delete(code);
@@ -294,8 +298,9 @@ function startMatch(aId, bId, timeMs, source) {
   const g = {
     id: crypto.randomUUID(), source,
     players: { w: flip ? aId : bId, b: flip ? bId : aId },
-    chess: new Chess(), timeMs, clock: { w: timeMs, b: timeMs }, lastTick: Date.now(), started: false,
-    status: 'vote', votes: {}, board: null, drawOffer: null, disconnect: {},
+    chess: new Chess(VARIANTS[variant] || START_FEN), variant: VARIANTS[variant] ? variant : null, startFen: VARIANTS[variant] || null,
+    timeMs, clock: { w: timeMs, b: timeMs }, lastTick: Date.now(), started: false,
+    status: 'vote', votes: {}, board: null, drawOffer: null, disconnect: {}, moveTimes: { w: [], b: [] },
   };
   games.set(g.id, g); userGame.set(aId, g.id); userGame.set(bId, g.id);
   const A = db.users[aId], B = db.users[bId];
@@ -324,7 +329,7 @@ function resolveVote(g) {
 }
 
 function beginGame(g, board, decision) {
-  g.board = board; g.boardDecision = decision; g.status = 'playing'; g.lastTick = Date.now();
+  g.board = board; g.boardDecision = decision; g.status = 'playing'; g.lastTick = g.lastMoveAt = Date.now();
   for (const c of ['w', 'b']) emitTo(g.players[c], 'game:start', gamePayload(g, g.players[c]));
   persistGame(g);
 }
@@ -345,6 +350,40 @@ function elo(ra, rb, score) {
   return Math.round(32 * (score - ea));
 }
 
+// ---------------------------------------------------------------- Fair-Play-Check (gegen Elo-/Münz-Farming)
+// Liefert einen Grund, wenn die Partie nicht gewertet werden darf – sonst null.
+const MAT = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+function material(fen) {
+  const m = { w: 0, b: 0 };
+  for (const ch of fen.split(' ')[0]) { const l = ch.toLowerCase(); if (MAT[l] != null) m[ch === l ? 'b' : 'w'] += MAT[l]; }
+  return m;
+}
+function fairPlay(g, result, reason) {
+  if (reason === 'abandon') return null; // Verlassen hat eigene Regel (nur der Verlasser verliert)
+  const plies = g.chess.history().length;
+  if (Math.min(Math.ceil(plies / 2), Math.floor(plies / 2)) < 3) return 'Zu kurz – jeder muss mindestens 3 Züge machen.';
+  if (reason === 'agreement' && plies < 20) return 'Remis zu früh vereinbart.';
+  if (reason === 'repetition' && plies < 16) return 'Absichtliche Zugwiederholung.';
+  const start = material(g.startFen || START_FEN), end = material(g.chess.fen());
+  const lost = { w: start.w - end.w, b: start.b - end.b };
+  if (result === 'w' || result === 'b') {
+    const loser = result === 'w' ? 'b' : 'w';
+    if (reason === 'timeout' && plies < 20) return 'Zu früh auf Zeit verloren.';
+    // Früh aufgegeben, obwohl man gar nicht schlechter stand
+    if (reason === 'resign' && plies < 24 && end[loser] >= end[result] - 1) return 'Aufgegeben, obwohl die Stellung noch offen war.';
+    // Figuren verschenkt: Verlierer gibt im Eiltempo massig Material her, der Gewinner fast nichts
+    const times = g.moveTimes?.[loser] || [];
+    const avg = times.length ? times.reduce((a, b) => a + b, 0) / times.length : Infinity;
+    if (lost[loser] >= 15 && lost[result] <= 2 && plies < 40 && avg < 2500) return 'Figuren wurden absichtlich verschenkt.';
+  }
+  // Immer wieder dieselben zwei mit schnellen/aufgegebenen Partien
+  const W = db.users[g.players.w], B = db.users[g.players.b];
+  const recent = W.history.filter((h) => h.type === 'online' && h.oppId === B.id && Date.now() - h.at < 2 * 3600_000);
+  const fishy = recent.filter((h) => h.unrated || h.reason === 'resign' || h.reason === 'agreement' || h.moves < 16).length;
+  if ((reason === 'resign' || reason === 'agreement' || plies < 16) && fishy >= 2) return 'Zu viele schnelle Partien gegeneinander – bitte richtig spielen.';
+  return null;
+}
+
 function endGame(g, result, reason) {
   if (g.status === 'over') return;
   if (g.status === 'playing' && g.timeMs && g.started && !g.paused) { g.clock[g.chess.turn()] -= Date.now() - g.lastTick; }
@@ -357,11 +396,13 @@ function endGame(g, result, reason) {
   const winner = result === 'w' ? W : result === 'b' ? B : null;
   const finisher = reason === 'checkmate' && winner ? winner.equipped.finisher : null;
   const plies = g.chess.history().length;
+  const unrated = fairPlay(g, result, reason);
+  if (unrated) console.log(`⚖️ nicht gewertet (${W.name} – ${B.name}): ${unrated}`);
   for (const [u, color, d0, opp] of [[W, 'w', dW, B], [B, 'b', dB, W]]) {
     const outcome = result === 'draw' ? 'draw' : result === color ? 'win' : 'loss';
-    let d = d0;
+    let d = g.variant ? 0 : d0; // Spaß-Varianten (Queen-Modus) zählen nicht für Elo
     let coins = outcome === 'win' ? REWARDS.win : outcome === 'draw' ? REWARDS.draw : REWARDS.loss;
-    if (plies < 4 && reason !== 'checkmate') coins = outcome === 'win' ? Math.round(REWARDS.win / 4) : 0; // Schutz gegen Farming
+    if (unrated) { d = 0; coins = 0; }
     if (reason === 'abandon') {
       // Verlassen: wer geht, verliert Elo (keine Münzen) – wer bleibt, bekommt nichts (keine Änderung)
       coins = 0;
@@ -370,14 +411,14 @@ function endGame(g, result, reason) {
     const before = u.rating;
     u.coins += coins; u.rating = Math.max(0, u.rating + d);
     d = u.rating - before; // bei 0 Elo kann man nicht weiter fallen
-    if (!(reason === 'abandon' && outcome === 'win')) {
+    if (!(reason === 'abandon' && outcome === 'win') && !unrated) {
       u.stats.games++; u.stats[outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws']++;
     }
-    if (outcome === 'win' && reason === 'checkmate') u.stats.mates++;
-    u.history.unshift({ type: 'online', opponent: opp.name, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now() });
+    if (outcome === 'win' && reason === 'checkmate' && !unrated) u.stats.mates++;
+    u.history.unshift({ type: 'online', opponent: opp.name, oppId: opp.id, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now(), ...(unrated ? { unrated } : {}), ...(g.variant ? { variant: g.variant } : {}) });
     u.history = u.history.slice(0, 50);
     emitTo(u.id, 'game:over', {
-      id: g.id, result, reason, outcome, coins, ratingChange: d, finisher,
+      id: g.id, result, reason, outcome, coins, ratingChange: d, finisher, unrated, variant: g.variant || null,
       winnerName: winner?.name || null, fen: g.chess.fen(), board: g.board,
       skins: { w: W.equipped.pieces, b: B.equipped.pieces }, profile: priv(u),
     });
@@ -419,7 +460,7 @@ function snapshot(g) {
   const clock = { ...g.clock };
   if (g.status === 'playing' && g.timeMs && g.started && !g.paused) clock[g.chess.turn()] -= Date.now() - g.lastTick;
   return {
-    id: g.id, uids: [g.players.w, g.players.b], source: g.source, players: g.players, moves: g.chess.history(),
+    id: g.id, uids: [g.players.w, g.players.b], source: g.source, players: g.players, moves: g.chess.history(), startFen: g.startFen || null, variant: g.variant || null,
     timeMs: g.timeMs, clock, started: g.started, board: g.board, boardDecision: g.boardDecision, drawOffer: g.drawOffer,
     owner: INSTANCE, updatedAt: Date.now(),
   };
@@ -473,7 +514,7 @@ async function adoptGameFor(uid) {
   if (Date.now() - d.updatedAt > 6 * 3600_000 || games.has(d.id) || d.owner === INSTANCE) return drop(); // alt oder schon beendet
   const { w, b } = d.players;
   if (!db.users[w] || !db.users[b] || userGame.has(w) || userGame.has(b)) return;
-  const chess = new Chess();
+  const chess = new Chess(d.startFen || START_FEN);
   try { for (const m of d.moves) chess.move(m); } catch { return drop(); }
   if (mongoGames) {
     const r = await mongoGames.replaceOne({ id: d.id, owner: d.owner }, { ...d, owner: INSTANCE, updatedAt: Date.now() });
@@ -484,8 +525,10 @@ async function adoptGameFor(uid) {
     id: d.id, source: d.source, players: d.players, chess, timeMs: d.timeMs,
     clock: { w: Math.max(1000, d.clock.w), b: Math.max(1000, d.clock.b) }, lastTick: Date.now(), started: d.started,
     status: 'playing', votes: {}, board: d.board, boardDecision: d.boardDecision, drawOffer: d.drawOffer,
+    variant: d.variant || null, startFen: d.startFen || null, moveTimes: { w: [], b: [] }, lastMoveAt: Date.now(),
     disconnect: {}, paused: true, restored: true, waitUntil: Date.now() + RESTORE_MS,
   };
+  g.deadline = { [w]: g.waitUntil, [b]: g.waitUntil };
   games.set(g.id, g); userGame.set(w, g.id); userGame.set(b, g.id);
   for (const p of [w, b]) if (p !== uid && !online.has(p)) g.disconnect[p] = setTimeout(() => onAbsent(g, p), RESTORE_MS);
   console.log('♻️ Partie nach Update übernommen:', g.id);
@@ -510,10 +553,21 @@ async function onAbsent(g, uid) {
   endGame(g, g.players.w === uid ? 'b' : 'w', 'abandon');
 }
 
+// Verbindung weg: Spiel pausieren, Uhr anhalten
+function pauseGame(g, { uid = null, lostAt = 0 } = {}) {
+  if (g.paused || g.status !== 'playing') return;
+  const now = Date.now();
+  // Abbruch wird erst nach einigen Sekunden bemerkt: lief die Uhr des Weggefallenen, zählt nur die Zeit bis zu seinem letzten Lebenszeichen
+  let until = now;
+  if (uid && lostAt && g.players[g.chess.turn()] === uid) until = Math.max(g.lastTick, Math.min(now, lostAt + 1000));
+  if (g.started && g.timeMs) g.clock[g.chess.turn()] -= until - g.lastTick;
+  g.paused = true; g.lastTick = now;
+  sendState(g);
+}
 function resumeIfReady(g) {
   if (!g.paused || !online.has(g.players.w) || !online.has(g.players.b)) return;
-  g.paused = false; g.lastTick = Date.now();
-  sendState(g, { resumedAfterUpdate: true });
+  g.paused = false; g.lastTick = g.lastMoveAt = Date.now();
+  sendState(g, { resumed: true });
 }
 
 // Ein Spieler, der gerade noch auf dem alten Server war, hat dort evtl. neuere Daten (Münzen, Elo …)
@@ -554,6 +608,9 @@ const ALLOWED_TIMES = [0, 60_000, 180_000, 300_000, 600_000, 900_000];
 
 io.on('connection', (socket) => {
   let user = null;
+  // letztes Lebenszeichen (auch Ping-Antworten) – für faire Uhr bei Verbindungsabbruch
+  socket.data.lastSeen = Date.now();
+  socket.conn.on('packet', () => { socket.data.lastSeen = Date.now(); });
   const need = (fn) => (...args) => { if (user) try { fn(...args); } catch (e) { console.error(e); } };
 
   socket.on('auth', async ({ token } = {}, ack) => {
@@ -573,7 +630,7 @@ io.on('connection', (socket) => {
       if (g.status === 'playing') {
         socket.emit('game:start', { ...gamePayload(g, user.id), resumed: true });
         const opp = opponentOf(g, user.id);
-        if (g.paused && !online.has(opp)) socket.emit('game:opponent', { online: false, deadline: g.waitUntil, update: true });
+        if (g.paused && !online.has(opp)) socket.emit('game:opponent', { online: false, deadline: g.deadline?.[opp] || g.waitUntil, paused: true, update: !!g.restored });
         resumeIfReady(g);
       }
       else if (g.status === 'vote') socket.emit('match:vote', { gameId: g.id, options: g.voteOptions, deadline: g.voteDeadline, duration: VOTE_MS, players: { w: pub(db.users[g.players.w]), b: pub(db.users[g.players.b]) }, you: g.players.w === user.id ? 'w' : 'b', votes: g.votes });
@@ -759,12 +816,12 @@ io.on('connection', (socket) => {
   });
 
   // --- Einladungscode (6-stellig, zufällig)
-  socket.on('room:create', need(({ timeMs = 600_000 } = {}, ack) => {
+  socket.on('room:create', need(({ timeMs = 600_000, variant = null } = {}, ack) => {
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
     let code; do code = digits(6); while (rooms.has(code));
-    rooms.set(code, { code, hostId: user.id, timeMs: ALLOWED_TIMES.includes(timeMs) ? timeMs : 600_000, at: Date.now() });
-    ack?.({ code });
+    rooms.set(code, { code, hostId: user.id, timeMs: ALLOWED_TIMES.includes(timeMs) ? timeMs : 600_000, variant: VARIANTS[variant] ? variant : null, at: Date.now() });
+    ack?.({ code, variant: VARIANTS[variant] ? variant : null });
   }));
   socket.on('room:cancel', need(() => { for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c); }));
 
@@ -776,7 +833,7 @@ io.on('connection', (socket) => {
       if (room.hostId === user.id) return ack?.({ error: 'Das ist dein eigener Code – teile ihn mit einem Freund.' });
       if (!online.has(room.hostId)) { rooms.delete(code); return ack?.({ error: 'Der Gastgeber ist nicht mehr online.' }); }
       rooms.delete(code);
-      startMatch(room.hostId, user.id, room.timeMs, 'invite');
+      startMatch(room.hostId, user.id, room.timeMs, 'invite', room.variant);
       return ack?.({ ok: true });
     }
     const target = byCode.get(code);
@@ -836,12 +893,14 @@ io.on('connection', (socket) => {
     const g = myGame();
     if (!g) return ack?.({ error: 'Kein aktives Spiel.' });
     const color = g.players.w === user.id ? 'w' : 'b';
-    if (g.paused) return ack?.({ error: 'Warte kurz, bis dein Gegner nach dem Update wieder da ist.', fen: g.chess.fen() });
+    if (g.paused) return ack?.({ error: 'Das Spiel ist pausiert – warte, bis dein Gegner wieder da ist.', fen: g.chess.fen() });
     if (g.chess.turn() !== color) return ack?.({ error: 'Du bist nicht am Zug.', fen: g.chess.fen() });
     let m;
     try { m = g.chess.move({ from, to, promotion: promotion || 'q' }); } catch { m = null; }
     if (!m) return ack?.({ error: 'Ungültiger Zug.', fen: g.chess.fen() });
     const now = Date.now();
+    (g.moveTimes ||= { w: [], b: [] })[color].push(now - (g.lastMoveAt || g.lastTick));
+    g.lastMoveAt = now;
     if (g.started && g.timeMs) g.clock[color] -= now - g.lastTick;
     if (!g.started && g.chess.history().length >= 2) g.started = true; // Uhr läuft ab dem 2. Zug
     g.lastTick = now;
@@ -906,8 +965,10 @@ io.on('connection', (socket) => {
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
     const g = games.get(userGame.get(user.id));
     if (g && g.status !== 'over') {
-      const uid = user.id;
-      emitTo(opponentOf(g, uid), 'game:opponent', { online: false, deadline: Date.now() + RECONNECT_MS });
+      const uid = user.id, deadline = Date.now() + RECONNECT_MS;
+      (g.deadline ||= {})[uid] = deadline;
+      pauseGame(g, { uid, lostAt: socket.data.lastSeen }); // Uhr anhalten, bis er wieder da ist
+      emitTo(opponentOf(g, uid), 'game:opponent', { online: false, deadline, paused: g.status === 'playing' });
       g.disconnect[uid] = setTimeout(() => onAbsent(g, uid), RECONNECT_MS);
     }
     broadcastStats();

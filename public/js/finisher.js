@@ -432,6 +432,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
 
   // Impact-System: Aberration, Zeitlupe, Impact-Frame, FOV-Punch, Titel-Wackeln, Speedlines
   const fx = { aberr: 0, invertT: 0, slowRecover: 0, fovKick: 0 };
+  const extras = { anims: [], cleanups: [] }; // DOM-Animationen/Ebenen der Durchbruch-Finisher
   const base = { aberr: 0, glitch: 0 };
   const impact = (str = 1, { invert = false, slow = str >= 0.8 } = {}) => {
     fx.aberr = Math.max(fx.aberr, 0.8 * str);
@@ -453,6 +454,8 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     for (const ps of composer.passes) ps.dispose?.();
     composer.dispose?.();
     renderer.setRenderTarget(null);
+    for (const a of extras.anims) { try { a.cancel(); } catch { /* egal */ } }
+    for (const f of extras.cleanups) { try { f(); } catch { /* egal */ } }
     overlay.remove();
   }
   if (warm) {
@@ -462,7 +465,8 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     return;
   }
 
-  const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera, frameParts, kingSq, sqPos, mats, attacker };
+  const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera, frameParts, kingSq, sqPos, mats, attacker,
+    overlay, anims: extras.anims, cleanups: extras.cleanups, onFrame: null, noRender: false };
   const effect = (EFFECTS[finisher] || EFFECTS.klassisch)(ctx);
   const TOTAL = effect.total || 7.6;
 
@@ -553,7 +557,8 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
         pc.g.traverse((o) => { if (o.isMesh) o.castShadow = pc.op > 0.6; });
       }
     }
-    composer.render();
+    if (!ctx.noRender) composer.render();
+    if (ctx.onFrame) { const f = ctx.onFrame; ctx.onFrame = null; try { f(renderer.domElement); } catch (e) { console.error(e); } }
   }
   raf = requestAnimationFrame(frameLoop);
   ctx.hide = hide;
@@ -563,7 +568,341 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
 const C = (s) => new THREE.Color(s);
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
+// ------------------------------------------------------------ Durchbruch: Effekte, die aus dem 3D-Fenster in die Website brechen
+const BREAK = {
+  layer(extras) {
+    const l = document.createElement('div'); l.className = 'bx-layer';
+    document.body.appendChild(l);
+    extras.cleanups.push(() => l.remove());
+    return l;
+  },
+  canvas(overlay) {
+    const c = document.createElement('canvas'); c.className = 'bx-crack';
+    c.width = innerWidth; c.height = innerHeight;
+    overlay.appendChild(c);
+    return c;
+  },
+  // Bild der 3D-Szene (+ Risse) – genau in dem Frame, in dem gerendert wurde
+  snapshot(gl, extra) {
+    const W = innerWidth, H = innerHeight;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = '#07080d'; g.fillRect(0, 0, W, H);
+    g.drawImage(gl, 0, 0, W, H);
+    if (extra) g.drawImage(extra, 0, 0, W, H);
+    return c.toDataURL('image/jpeg', 0.82);
+  },
+  // Bausteine der Website, die herumfliegen dürfen (große Container werden in ihre Kinder zerlegt)
+  pieces() {
+    const W = innerWidth, H = innerHeight, area = W * H, out = [];
+    const visit = (el, depth) => {
+      if (!el || el.closest('.finisher, .bx-layer, #overlay-root, #toasts')) return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 24 || r.height < 14 || r.bottom < 0 || r.top > H || r.right < 0 || r.left > W) return;
+      const isBoard = el.matches('.board, .board *, .hero-board, .hero-board *');
+      if (!isBoard && r.width * r.height > area * 0.28 && depth < 4 && el.children.length) { for (const ch of el.children) visit(ch, depth + 1); return; }
+      out.push({ el, r });
+    };
+    for (const sel of ['.topbar', '.view.active', '.nav', '#site-foot']) visit(document.querySelector(sel), 0);
+    return out.slice(0, 70);
+  },
+  // Radiales Bruchmuster um den Einschlag
+  pattern(ix, iy) {
+    const n = 8, angs = [];
+    const off = Math.random() * Math.PI;
+    for (let i = 0; i < n; i++) angs.push(off + ((i + rand(-0.28, 0.28)) / n) * Math.PI * 2);
+    return { ix, iy, angs, rings: [0, rand(80, 130), rand(240, 340), Math.hypot(innerWidth, innerHeight) * 1.3] };
+  },
+  drawCracks(c, pat, level) {
+    const g = c.getContext('2d'), { ix, iy, angs, rings } = pat;
+    g.clearRect(0, 0, c.width, c.height);
+    const P = (a, r) => [ix + Math.cos(a) * r, iy + Math.sin(a) * r];
+    const reach = level >= 2 ? rings[3] : rings[2] * 0.75;
+    const stroke = (w, col, blur) => {
+      g.lineWidth = w; g.strokeStyle = col; g.shadowColor = '#bfe9ff'; g.shadowBlur = blur; g.lineCap = 'round'; g.lineJoin = 'round';
+      g.beginPath();
+      for (const a of angs) {
+        g.moveTo(ix, iy);
+        const steps = 12;
+        for (let s = 1; s <= steps; s++) { const r = (reach * s) / steps; const [x, y] = P(a + Math.sin(s * 7.3 + a * 3) * 0.035, r); g.lineTo(x, y); }
+      }
+      for (let k = 1; k <= Math.min(level, 2); k++) {
+        for (let i = 0; i < angs.length; i++) {
+          const [x1, y1] = P(angs[i], rings[k]), [x2, y2] = P(angs[(i + 1) % angs.length], rings[k]);
+          g.moveTo(x1, y1); g.lineTo((x1 + x2) / 2 + rand(-8, 8), (y1 + y2) / 2 + rand(-8, 8)); g.lineTo(x2, y2);
+        }
+      }
+      g.stroke();
+    };
+    stroke(5, 'rgba(190,230,255,.35)', 18);
+    stroke(1.6, 'rgba(255,255,255,.95)', 6);
+    // Einschlag: weißer Stern
+    const grd = g.createRadialGradient(ix, iy, 0, ix, iy, 60);
+    grd.addColorStop(0, 'rgba(255,255,255,.95)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.beginPath(); g.arc(ix, iy, 60, 0, Math.PI * 2); g.fill();
+  },
+  // Bildschirm zerspringt in Scherben, die über die Website fallen
+  shatter(layer, img, pat) {
+    const { ix, iy, angs, rings } = pat, n = angs.length, anims = [];
+    const P = (a, r) => [ix + Math.cos(a) * r, iy + Math.sin(a) * r];
+    for (let i = 0; i < n; i++) {
+      const a1 = angs[i], a2 = angs[(i + 1) % n] + (i === n - 1 ? Math.PI * 2 : 0);
+      for (let k = 0; k < 3; k++) {
+        const pts = k === 0 ? [[ix, iy], P(a1, rings[1]), P(a2, rings[1])] : [P(a1, rings[k]), P(a1, rings[k + 1]), P(a2, rings[k + 1]), P(a2, rings[k])];
+        const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length, cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+        const d = document.createElement('div'); d.className = 'bx-shard';
+        d.style.backgroundImage = `url(${img})`;
+        d.style.clipPath = `polygon(${pts.map(([x, y]) => `${x.toFixed(1)}px ${y.toFixed(1)}px`).join(',')})`;
+        d.style.transformOrigin = `${cx.toFixed(1)}px ${cy.toFixed(1)}px`;
+        layer.appendChild(d);
+        const dx = cx - ix, dy = cy - iy, len = Math.hypot(dx, dy) || 1;
+        const sp = rand(160, 460) * (k === 0 ? 1.5 : 1);
+        const vx = (dx / len) * sp + rand(-60, 60), vy = (dy / len) * sp - rand(80, 320), rot = rand(-300, 300), T = rand(1.4, 1.9);
+        const frames = [];
+        for (let s = 0; s <= 12; s++) {
+          const t = (s / 12) * T;
+          frames.push({ transform: `translate(${(vx * t).toFixed(1)}px, ${(vy * t + 1100 * t * t).toFixed(1)}px) rotate(${(rot * t).toFixed(1)}deg) scale(${(1 + 0.12 * t).toFixed(3)})`, opacity: s > 8 ? 1 - (s - 8) / 4 : 1 });
+        }
+        anims.push(d.animate(frames, { duration: T * 1000, delay: k * 50 + rand(0, 90), easing: 'linear', fill: 'forwards' }));
+      }
+    }
+    return anims;
+  },
+  // Website stürzt ein: alles fällt aus dem Bild – und springt dann wieder an seinen Platz
+  fall(items) {
+    const H = innerHeight;
+    return items.map(({ el, r }) => {
+      const dx = rand(-140, 140), rot = rand(-40, 40), drop = H - r.top + rand(80, 320);
+      return el.animate([
+        { translate: '0px 0px', rotate: '0deg' },
+        { translate: `${(dx * 0.1).toFixed(1)}px -18px`, rotate: `${(rot * 0.12).toFixed(1)}deg`, offset: 0.07, easing: 'cubic-bezier(.55,0,1,.45)' },
+        { translate: `${dx.toFixed(1)}px ${drop.toFixed(1)}px`, rotate: `${rot.toFixed(1)}deg`, offset: 0.42 },
+        { translate: `${dx.toFixed(1)}px ${drop.toFixed(1)}px`, rotate: `${rot.toFixed(1)}deg`, offset: 0.62, easing: 'cubic-bezier(.2,1.35,.4,1)' },
+        { translate: '0px 0px', rotate: '0deg' },
+      ], { duration: 3400, delay: ((r.top + r.height) / H) * -0 + rand(0, 260) + (1 - r.top / H) * 180, fill: 'none' });
+    });
+  },
+  // Website wird in einen Punkt gesaugt – und nach dem Urknall wieder ausgespuckt
+  vortex(items, cx, cy) {
+    return items.map(({ el, r }, i) => {
+      const dx = cx - (r.left + r.width / 2), dy = cy - (r.top + r.height / 2);
+      const spin = (i % 2 ? 1 : -1) * rand(380, 760), dist = Math.hypot(dx, dy);
+      return el.animate([
+        { translate: '0px 0px', rotate: '0deg', scale: '1', easing: 'cubic-bezier(.55,0,.95,.35)' },
+        { translate: `${dx.toFixed(1)}px ${dy.toFixed(1)}px`, rotate: `${spin.toFixed(0)}deg`, scale: '0.02', offset: 0.4 },
+        { translate: `${dx.toFixed(1)}px ${dy.toFixed(1)}px`, rotate: `${spin.toFixed(0)}deg`, scale: '0.02', offset: 0.56, easing: 'cubic-bezier(.12,1.45,.3,1)' },
+        { translate: '0px 0px', rotate: '0deg', scale: '1' },
+      ], { duration: 3600, delay: Math.max(0, 260 - dist * 0.25) + rand(0, 120), fill: 'none' });
+    });
+  },
+  // Gezackter Riss quer über den Bildschirm
+  tearPath(cx) {
+    const H = innerHeight, pts = [];
+    for (let i = 0; i <= 16; i++) pts.push([cx + (i === 0 || i === 16 ? rand(-20, 20) : rand(-50, 50)), -20 + ((H + 40) * i) / 16]);
+    return pts;
+  },
+  drawTear(c, pts, prog) {
+    const g = c.getContext('2d'), H = innerHeight, mid = H / 2, lo = mid - (prog * (H + 40)) / 2, hi = mid + (prog * (H + 40)) / 2;
+    g.clearRect(0, 0, c.width, c.height);
+    const path = () => {
+      g.beginPath(); let started = false;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
+        if (y2 < lo || y1 > hi) continue;
+        const ty1 = Math.max(y1, lo), ty2 = Math.min(y2, hi);
+        const fx1 = x1 + ((x2 - x1) * (ty1 - y1)) / (y2 - y1), fx2 = x1 + ((x2 - x1) * (ty2 - y1)) / (y2 - y1);
+        if (!started) { g.moveTo(fx1, ty1); started = true; }
+        g.lineTo(fx2, ty2);
+      }
+    };
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const [w, col, blur] of [[26, 'rgba(255,79,216,.35)', 40], [10, 'rgba(122,247,255,.8)', 20], [3, '#ffffff', 8]]) {
+      g.lineWidth = w; g.strokeStyle = col; g.shadowColor = col; g.shadowBlur = blur; path(); g.stroke();
+    }
+  },
+  // Bildschirm reißt in zwei Hälften, die auseinanderfliegen
+  split(layer, img, pts) {
+    const W = innerWidth, H = innerHeight;
+    const poly = (side) => (side < 0 ? [[-20, -20], ...pts, [-20, H + 20]] : [[W + 20, -20], ...pts, [W + 20, H + 20]]);
+    return [-1, 1].map((side) => {
+      const d = document.createElement('div'); d.className = 'bx-shard';
+      d.style.backgroundImage = `url(${img})`;
+      d.style.clipPath = `polygon(${poly(side).map(([x, y]) => `${x.toFixed(1)}px ${y.toFixed(1)}px`).join(',')})`;
+      d.style.transformOrigin = `${side < 0 ? 0 : W}px ${H / 2}px`;
+      layer.appendChild(d);
+      return d.animate([
+        { transform: 'translate(0,0) rotate(0deg)', opacity: 1 },
+        { transform: `translate(${side * 30}px, 0) rotate(${side * 2}deg)`, opacity: 1, offset: 0.15, easing: 'cubic-bezier(.5,0,.9,.5)' },
+        { transform: `translate(${side * W * 0.8}px, ${rand(40, 120)}px) rotate(${side * 14}deg)`, opacity: 0.4 },
+      ], { duration: 1500, easing: 'linear', fill: 'forwards' });
+    });
+  },
+  bodyShake(extras, ms = 450) {
+    const a = document.body.animate([
+      { translate: '0 0' }, { translate: '-14px 8px' }, { translate: '12px -10px' }, { translate: '-9px -6px' }, { translate: '7px 9px' }, { translate: '-4px 3px' }, { translate: '0 0' },
+    ], { duration: ms, easing: 'ease-out' });
+    extras.anims.push(a);
+  },
+};
+
 const EFFECTS = {
+  // 🪟 Vierte Wand: Der König fliegt gegen deinen Bildschirm, das Glas zerspringt, die Website stürzt ein
+  viertewand(ctx) {
+    const { king, kingPos, parts, bigParts, attacker, cam, camera, overlay } = ctx;
+    const extras = { anims: ctx.anims, cleanups: ctx.cleanups };
+    const A = attacker?.g; const a0 = A ? A.position.clone() : kingPos.clone().add(V(1.5, 0, 1.5));
+    const dir = towards(a0, kingPos);
+    const crack = BREAK.canvas(overlay), layer = BREAK.layer(extras);
+    const kStart = kingPos.clone(), fwd = V(0, 0, 0), target = V(0, 0, 0);
+    let phase = 0, pat = null;
+    return {
+      total: 9.4,
+      update(t, dt) {
+        cam.distEnd = 5.2; cam.heightEnd = 2.3; cam.orbit = 0.025;
+        // Anlauf der Matt-Figur
+        if (A && t > 1.8 && phase === 0) {
+          const k = ease.in(seg(t, 1.9, 2.55));
+          A.position.lerpVectors(a0, kingPos.clone().addScaledVector(dir, -0.45), k);
+          A.position.y = a0.y + Math.sin(k * Math.PI) * 0.25;
+          parts.spawn(A.position.clone().setY(0.25), V(rand(-0.6, 0.6), rand(0.2, 0.9), rand(-0.6, 0.6)), C('#9fd8ff').multiplyScalar(1.5), 0.45);
+        }
+        if (phase === 0 && t >= 2.55) {
+          phase = 1; sound.thud(); sound.whoosh(); ctx.impact(0.6, { slow: false });
+          for (let i = 0; i < 140; i++) parts.spawn(kingPos.clone().setY(0.6), V(rand(-1, 1), rand(0, 1), rand(-1, 1)).normalize().multiplyScalar(rand(2, 6)), C(i % 2 ? '#ffffff' : '#9fd8ff').multiplyScalar(1.4), rand(0.3, 0.8), 4);
+        }
+        // König fliegt direkt in die Kamera – und bleibt an der Scheibe kleben
+        if (phase >= 1 && phase < 3) {
+          camera.getWorldDirection(fwd);
+          target.copy(camera.position).addScaledVector(fwd, 1.05); target.y -= 0.5;
+          const k = ease.in(seg(t, 2.55, 3.2));
+          king.position.lerpVectors(kStart, target, k);
+          if (phase === 1) { king.rotation.y += dt * 16; king.rotation.z = Math.sin(t * 11) * 0.5 * (1 - k); }
+          else { king.rotation.z *= 0.9; }
+          if (phase === 1) bigParts.spawn(king.position.clone().add(V(0, 0.5, 0)), V(0, 0, 0), C('#bfe9ff').multiplyScalar(1.1), 0.25);
+        }
+        if (phase === 1 && t >= 3.2) {
+          phase = 2;
+          const p = king.position.clone().add(V(0, 0.55, 0)).project(camera);
+          const ix = Math.min(innerWidth * 0.72, Math.max(innerWidth * 0.28, (p.x * 0.5 + 0.5) * innerWidth));
+          const iy = Math.min(innerHeight * 0.7, Math.max(innerHeight * 0.3, (-p.y * 0.5 + 0.5) * innerHeight));
+          pat = BREAK.pattern(ix, iy);
+          BREAK.drawCracks(crack, pat, 1);
+          sound.glass(); sound.boom(); ctx.impact(1.3, { slow: true }); ctx.flash(0.35);
+          BREAK.bodyShake(extras, 500);
+        }
+        if (phase === 2 && !pat.l2 && t >= 4.0) { pat.l2 = true; BREAK.drawCracks(crack, pat, 2); sound.glass(); ctx.shake(0.05, 0.3); BREAK.bodyShake(extras, 380); }
+        if (phase === 2 && t >= 4.75) {
+          phase = 3;
+          ctx.onFrame = (gl) => {
+            const img = BREAK.snapshot(gl, crack);
+            crack.remove(); ctx.noRender = true; overlay.classList.add('bx-open');
+            ctx.anims.push(...BREAK.shatter(layer, img, pat));
+            sound.glass(); sound.bang();
+            const items = BREAK.pieces();
+            const tm = setTimeout(() => { ctx.anims.push(...BREAK.fall(items)); sound.whoosh(); }, 280);
+            ctx.cleanups.push(() => clearTimeout(tm));
+          };
+        }
+      },
+    };
+  },
+
+  // 🌀 Realitätsriss: ein Riss verschluckt den König, reißt den Bildschirm auf und saugt die Website hinein
+  riss(ctx) {
+    const { scene, king, kingPos, kingMat, parts, bigParts, attacker, cam, camera, overlay, pieces } = ctx;
+    const extras = { anims: ctx.anims, cleanups: ctx.cleanups };
+    const A = attacker?.g; const a0 = A ? A.position.clone() : kingPos.clone().add(V(1.5, 0, 1.5));
+    const dir = towards(a0, kingPos);
+    const riftPos = kingPos.clone().addScaledVector(dir, 1.25).setY(1.25);
+    const riftMat = new THREE.ShaderMaterial({
+      uniforms: { uT: { value: 0 }, uOpen: { value: 0 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `varying vec2 vUv; uniform float uT, uOpen;
+        float h(float x){ return fract(sin(x * 127.1) * 43758.5453); }
+        float n(float x){ float i = floor(x), f = fract(x); return mix(h(i), h(i + 1.0), f * f * (3.0 - 2.0 * f)); }
+        void main(){
+          float y = vUv.y;
+          float jag = (n(y * 9.0 + uT * 0.7) - 0.5) * 0.16 + (n(y * 31.0 - uT * 2.0) - 0.5) * 0.05;
+          float edge = smoothstep(0.0, 0.12, y) * smoothstep(1.0, 0.88, y);
+          float w = uOpen * 0.09 * edge;
+          float d = abs(vUv.x - 0.5 - jag);
+          float core = smoothstep(w + 0.004, w * 0.3, d);
+          float glow = exp(-d / (0.018 + w * 0.9)) * edge * min(uOpen, 1.5);
+          vec3 col = mix(vec3(1.0, 0.31, 0.85), vec3(0.48, 0.97, 1.0), n(y * 4.0 + uT * 1.3));
+          vec3 c = col * glow * 3.2 + mix(vec3(1.0), col, 0.35) * core * 3.5 / (1.0 + uOpen * 0.8);
+          gl_FragColor = vec4(c, clamp(glow + core, 0.0, 1.0));
+        }`,
+    });
+    const rift = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 3.4), riftMat);
+    rift.position.copy(riftPos); scene.add(rift);
+    const near = [...pieces.values()].filter((p) => p.g !== king && p.g.position.distanceTo(kingPos) < 2.6).map((p) => ({ g: p.g, p0: p.g.position.clone() }));
+    const k0 = kingPos.clone();
+    const tear = BREAK.canvas(overlay), layer = BREAK.layer(extras);
+    const tearX = innerWidth / 2 + rand(-40, 40), pts = BREAK.tearPath(tearX);
+    let phase = 0, gone = false;
+    return {
+      total: 9.8,
+      update(t, dt) {
+        cam.distEnd = 5.6; cam.heightEnd = 2.2; cam.orbit = 0.02;
+        cam.look.lerp(k0.clone().lerp(riftPos, 0.5).setY(0.9), 1 - Math.exp(-dt * 2));
+        riftMat.uniforms.uT.value = t;
+        rift.quaternion.copy(camera.quaternion);
+        const open = ease.out(seg(t, 1.7, 2.5)) + (gone ? ease.in(seg(t, 3.9, 4.6)) * 2.2 : 0);
+        riftMat.uniforms.uOpen.value = open;
+        rift.scale.set(1 + (gone ? ease.in(seg(t, 3.9, 4.6)) * 2.5 : 0), 1, 1);
+        if (phase === 0 && t >= 1.75) { phase = 1; sound.rift(); }
+        // Sog: Funken und Figuren werden zum Riss gezogen
+        if (t > 1.8 && t < 4.6) {
+          for (let i = 0; i < 6; i++) {
+            const a = Math.random() * Math.PI * 2, r = rand(1.4, 3.2);
+            const p = riftPos.clone().add(V(Math.cos(a) * r, rand(-1.2, 1.2), Math.sin(a) * r));
+            parts.spawn(p, riftPos.clone().sub(p).multiplyScalar(rand(1.2, 2.2)), C(i % 2 ? '#ff4fd8' : '#7af7ff').multiplyScalar(1.6), 0.55);
+          }
+          const pull = ease.inOut(seg(t, 2.2, 3.9)) * 0.35;
+          for (const it of near) {
+            it.g.position.lerpVectors(it.p0, riftPos.clone().setY(it.p0.y), pull * (1 - it.p0.distanceTo(k0) / 3));
+            it.g.rotation.z = Math.sin(t * 20 + it.p0.x) * 0.06 * pull * 3;
+          }
+        }
+        // König wird gestreckt und verschluckt
+        if (!gone && t > 2.4) {
+          const k = ease.in(seg(t, 2.5, 3.9));
+          king.position.lerpVectors(k0, riftPos.clone().setY(riftPos.y - 0.6), k);
+          king.scale.set(1 - k * 0.8, 1 + k * 1.6, 1 - k * 0.8);
+          king.rotation.y += dt * (3 + k * 20);
+          if (kingMat.emissive) { kingMat.emissive.set('#ff4fd8'); kingMat.emissiveIntensity = k * 1.2; }
+          bigParts.spawn(king.position.clone().add(V(0, 0.5, 0)), V(0, 0, 0), C('#ff8ae8').multiplyScalar(1.2), 0.3);
+          if (t >= 3.9) {
+            gone = true; king.visible = false; sound.boom(); ctx.impact(1.2, { slow: false }); ctx.flash(0.6, '#ffd6f6');
+            for (let i = 0; i < 260; i++) parts.spawn(riftPos.clone(), V(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(rand(2, 7)), C(i % 2 ? '#ff4fd8' : '#7af7ff').multiplyScalar(1.6), rand(0.4, 1.1), 0, 1);
+          }
+        }
+        // Der Riss bricht aus dem Bildschirm aus
+        if (gone && phase < 3) BREAK.drawTear(tear, pts, ease.out(seg(t, 4.0, 4.55)));
+        if (gone && phase === 1 && t >= 4.0) { phase = 2; sound.rift(); BREAK.bodyShake(extras, 600); }
+        if (phase === 2 && t >= 4.6) {
+          phase = 3;
+          ctx.onFrame = (gl) => {
+            const img = BREAK.snapshot(gl, tear);
+            tear.remove(); ctx.noRender = true; overlay.classList.add('bx-open');
+            const glow = document.createElement('div'); glow.className = 'bx-rift'; glow.style.left = `${tearX}px`; layer.appendChild(glow);
+            ctx.anims.push(glow.animate([{ scale: '1 0' }, { scale: '1 1', offset: 0.1 }, { scale: '3 1', offset: 0.55 }, { scale: '12 1.2', opacity: 1, offset: 0.62 }, { scale: '0 1', opacity: 0 }], { duration: 4200, fill: 'forwards', easing: 'ease-in-out' }));
+            ctx.anims.push(...BREAK.split(layer, img, pts));
+            sound.bang();
+            const items = BREAK.pieces();
+            const t1 = setTimeout(() => { ctx.anims.push(...BREAK.vortex(items, tearX, innerHeight / 2)); sound.rift(); }, 300);
+            const t2 = setTimeout(() => {
+              const bang = document.createElement('div'); bang.className = 'bx-bang'; bang.style.setProperty('--x', `${tearX}px`); layer.appendChild(bang);
+              ctx.anims.push(bang.animate([{ opacity: 0, scale: '0.2' }, { opacity: 1, scale: '1', offset: 0.15 }, { opacity: 0, scale: '1.6' }], { duration: 1100, fill: 'forwards' }));
+              sound.bang(); BREAK.bodyShake(extras, 700);
+            }, 300 + 3600 * 0.56 - 80);
+            ctx.cleanups.push(() => { clearTimeout(t1); clearTimeout(t2); });
+          };
+        }
+      },
+    };
+  },
+
   klassisch(ctx) {
     const { king, kingPos, parts } = ctx;
     let thud = false;

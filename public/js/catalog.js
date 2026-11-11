@@ -41,6 +41,10 @@ export const BOARDS = [
     tex: { light: { kind: 'brushed', base: '#4a4d55', accent: '#5e626b' }, dark: { kind: 'brushed', base: '#1a1c21', accent: '#2b2e35' } } },
   { id: 'nordlicht', name: 'Nordlicht', price: 1350, light: '#2c5c63', dark: '#120f2e', frame: '#06050f', last: 'rgba(120, 255, 200, .45)', desc: 'Polarlichter tanzen über das Brett.',
     tex: { light: { kind: 'swirl', base: '#2c6b6a', accent: '#8affc8', deep: '#173a45' }, dark: { kind: 'swirl', base: '#2a1a5c', accent: '#c48aff', deep: '#0d0a24' } } },
+  { id: 'glasbruch', name: 'Zerbrochener Bildschirm', price: 1900, light: '#d6e1ec', dark: '#26324a', frame: '#0a0d14', last: 'rgba(160, 220, 255, .55)', desc: 'Gesprungenes Displayglas – als hätte jemand zu hart aufs Brett gehauen.',
+    tex: { light: { kind: 'shards', base: '#e6eef6', accent: '#ffffff', deep: '#a9bbcd' }, dark: { kind: 'shards', base: '#2e3d5a', accent: '#a9dcff', deep: '#121929' } } },
+  { id: 'riss', name: 'Realitätsriss', price: 2000, light: '#3e3168', dark: '#0b0716', frame: '#020104', last: 'rgba(255, 79, 216, .5)', desc: 'Die Leere zwischen den Dimensionen – durchzogen von leuchtenden Rissen.',
+    tex: { light: { kind: 'rift', base: '#4d3d80', accent: '#7af7ff', accent2: '#ff4fd8', deep: '#1c1436' }, dark: { kind: 'rift', base: '#170d2c', accent: '#ff4fd8', accent2: '#7af7ff', deep: '#020104' } } },
   { id: 'royal', name: 'Königsgold', price: 2000, light: '#fff4d6', dark: '#c9a227', frame: '#3a2a00', last: 'rgba(255, 255, 255, .5)', desc: 'Nur für wahre Könige.',
     tex: { light: { kind: 'marble', base: '#fff4d6', accent: '#ecd9a8' }, dark: { kind: 'brushed', base: '#c9a227', accent: '#f2d675' } } },
 ];
@@ -99,6 +103,14 @@ export const PIECES = [
     w: { fill: ['rgba(255,255,255,.85)', 'rgba(200,230,255,.55)'], stroke: '#e8f6ff', detail: '#5aa8ff', glow: '#bfe3ff' },
     b: { fill: ['rgba(60,20,90,.85)', 'rgba(10,0,25,.75)'], stroke: '#b98cff', detail: '#e7d6ff', glow: '#9a5cff' },
     mat: { metal: 0.05, rough: 0.1, opacity: 0.7, emissive: 0.5 } },
+  { id: 'prisma', name: 'Prisma', price: 1900, desc: 'Geschliffenes Glas, das das Licht in Regenbogenfarben bricht.',
+    w: { fill: ['rgba(255,255,255,.96)', 'rgba(175,215,255,.8)'], stroke: '#ffffff', detail: '#ff5ad1', swirl: '#b9f3ff', glow: '#9fd8ff' },
+    b: { fill: ['rgba(52,62,90,.95)', 'rgba(12,14,26,.9)'], stroke: '#9fd8ff', detail: '#ffd36a', swirl: '#c08cff', glow: '#5ad1ff' },
+    mat: { metal: 0.15, rough: 0.04, opacity: 0.88, emissive: 0.3 } },
+  { id: 'antimaterie', name: 'Antimaterie', price: 2000, desc: 'Figuren aus einer anderen Dimension – sie glühen zwischen den Welten.',
+    w: { fill: ['#ffffff', '#bff6ff'], stroke: '#00d5ee', detail: '#00a8c4', swirl: '#7af7ff', glow: '#7af7ff' },
+    b: { fill: ['#1a0026', '#050008'], stroke: '#ff4fd8', detail: '#ff4fd8', swirl: '#ff8ae8', glow: '#ff4fd8' },
+    mat: { metal: 0.3, rough: 0.2, emissive: 0.7 } },
   { id: 'neon', name: 'Neon', price: 1800, desc: 'Leuchtet im Dunkeln.',
     w: { fill: ['#0f2a3d', '#071320'], stroke: '#39f0ff', detail: '#39f0ff', glow: '#39f0ff' },
     b: { fill: ['#3a0f3d', '#170620'], stroke: '#ff3df0', detail: '#ff3df0', glow: '#ff3df0' },
@@ -107,6 +119,8 @@ export const PIECES = [
 
 export const FINISHERS = [
   { id: 'klassisch', name: 'Königssturz', price: 0, icon: '♚', desc: 'Der König kippt in Zeitlupe um.' },
+  { id: 'viertewand', name: 'Vierte Wand', price: 2500, icon: '🪟', ultra: true, desc: 'Der König kracht durch deinen Bildschirm – das Glas zerspringt und die ganze Website stürzt ein.' },
+  { id: 'riss', name: 'Realitätsriss', price: 2500, icon: '🌀', ultra: true, desc: 'Ein Riss in der Realität verschluckt den König, reißt den Bildschirm auf und saugt die ganze Website hinein.' },
   { id: 'feuerwerk', name: 'Feuerwerk', price: 600, icon: '🎆', desc: 'Der König startet als Rakete und explodiert bunt.' },
   { id: 'blitz', name: 'Donnerschlag', price: 900, icon: '⚡', desc: 'Drei Blitze schlagen ein – der König zerfällt.' },
   { id: 'glitch', name: 'Datenzerfall', price: 900, icon: '👾', desc: 'Der König glitcht, zerfällt in Pixel und wird gelöscht.' },
@@ -136,6 +150,8 @@ export const FINISHERS = [
 // Bundles: Brett + Figuren + Finisher günstiger. Bereits Gekauftes wird nicht nochmal berechnet.
 export const BUNDLES = [
   { id: 'starter', name: 'Starter-Pack', icon: '🎁', discount: 1, items: [['board', 'silber'], ['pieces', 'chrom'], ['finisher', 'midas']], desc: 'Kostenlos für alle: Silber-Marmor-Brett, Silber-Chrom-Figuren und der Midas-Touch.' },
+  { id: 'viertewand', name: 'Vierte-Wand-Paket', icon: '🪟', discount: 0.25, isNew: true, items: [['board', 'glasbruch'], ['pieces', 'prisma'], ['finisher', 'viertewand']], desc: 'NEU: Zerbrochener Bildschirm, Prisma-Glasfiguren und der Finisher, der aus dem Bildschirm bricht.' },
+  { id: 'realitaet', name: 'Realitätsriss-Paket', icon: '🌀', discount: 0.25, isNew: true, items: [['board', 'riss'], ['pieces', 'antimaterie'], ['finisher', 'riss']], desc: 'NEU: Die Leere zwischen den Dimensionen, Antimaterie-Figuren und der Riss, der die ganze Website verschluckt.' },
   { id: 'eiszeit', name: 'Eiszeit-Paket', icon: '🧊', discount: 0.2, items: [['board', 'eis'], ['pieces', 'arktis'], ['finisher', 'kristall']], desc: 'Gletschereis-Brett, Arktis-Marmor-Figuren und der Eissplitter-Finisher.' },
   { id: 'sakura', name: 'Kirschblüten-Paket', icon: '🌸', discount: 0.2, items: [['board', 'sakura'], ['pieces', 'sakura'], ['finisher', 'samurai']], desc: 'Kirschblüten-Brett und -Figuren plus Samurai-Schnitt.' },
   { id: 'vulkan', name: 'Vulkan-Paket', icon: '🌋', discount: 0.2, items: [['board', 'lava'], ['pieces', 'lava'], ['finisher', 'erdbeben']], desc: 'Vulkan-Brett, Lava-Figuren und das Erdbeben.' },
