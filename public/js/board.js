@@ -77,6 +77,7 @@ export class Board {
 
   load(fen, lastMove = null, animate = true) {
     this.chess.load(fen);
+    if (!animate) { this.pieceLayer.innerHTML = ''; this.pieceEls = new Map(); } // frischer Aufbau (neues Spiel)
     this.lastMove = lastMove;
     this.selected = null;
     this._render(animate);
@@ -93,7 +94,12 @@ export class Board {
     const orphan = [];
     for (const [sq, p] of old) {
       const n = next.get(sq);
-      if (n && n.type === p.type && n.color === p.color) keep.set(sq, p);
+      if (n && n.type === p.type && n.color === p.color) {
+        p.el.classList.remove('captured');
+        if (!animate) p.el.classList.add('no-anim');
+        this._place(p.el, sq); // auch nach Brettdrehung richtig positionieren
+        keep.set(sq, p);
+      }
       else orphan.push([sq, p]);
     }
     const created = [];
@@ -125,7 +131,7 @@ export class Board {
       }
     }
     for (const [, p] of orphan) {
-      if (animate) { p.el.classList.add('captured'); setTimeout(() => p.el.remove(), 260); }
+      if (animate) { p.el.classList.add('captured'); const el = p.el; setTimeout(() => el.remove(), 260); }
       else p.el.remove();
     }
     this.pieceEls = keep;

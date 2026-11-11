@@ -4,6 +4,7 @@ import { Board, miniBoard, applyBoardTheme } from './board.js';
 import { pieceURL } from './pieces.js';
 import { BOARDS, PIECES, FINISHERS, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem } from './catalog.js';
 import { sound } from './sound.js';
+import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -835,3 +836,14 @@ async function renderLeaderboard() {
       <td><b>${u.rating}</b></td><td><span class="res-win">${u.stats.wins}</span> / <span class="res-loss">${u.losses}</span> / <span class="res-draw">${u.draws}</span></td><td>${u.botWins}</td></tr>`).join('')}
     </tbody></table>` : '<p class="muted">Noch keine Partien gespielt – sei der Erste!</p>';
 }
+
+// ================================================================ Version
+function showChangelog() {
+  openOverlay(`<h2>Version ${VERSION}</h2><p class="muted">Stand ${new Date(VERSION_DATE).toLocaleDateString('de-DE')}</p>
+    <ul class="changelog">${CHANGELOG.map(([v, t]) => `<li><b>v${v}</b><span>${esc(t)}</span></li>`).join('')}</ul>
+    <div class="modal-actions"><button class="btn primary" onclick="this.closest('.overlay').remove()">Schließen</button></div>`);
+}
+$('#ver-pill').textContent = 'v' + VERSION;
+$('#ver-pill').onclick = (e) => { e.preventDefault(); e.stopPropagation(); showChangelog(); };
+$('#site-foot').innerHTML = `SchachArena · Version ${VERSION} · <button id="foot-changes">Was ist neu?</button>`;
+$('#foot-changes').onclick = showChangelog;
