@@ -75,8 +75,15 @@ socket.on('connect', async () => {
   setProfile(r.profile);
   if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
   if (!state.booted) { state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); warmFinisherLater(); }
+  // Laufende Partie gibt es auf dem Server nicht mehr (sollte praktisch nie passieren)
+  if (state.game?.active && r.gameId !== state.game.id) {
+    state.game.active = false; clearInterval(state.oppTimer); setBanner(''); renderOnline();
+    toast('Die Partie konnte nach dem Neustart leider nicht fortgesetzt werden.', 'warn');
+  }
   if (r.version && r.version !== VERSION) { state.updateTo = r.version; checkUpdate(); }
 });
+// Partie läuft inzwischen auf dem neuen Server: neu verbinden
+socket.on('server:reconnect', () => { state.restarting = true; socket.disconnect(); setTimeout(() => socket.connect(), 400); });
 socket.on('disconnect', () => { if (!state.restarting) toast('Verbindung verloren – verbinde neu…', 'warn'); });
 socket.on('server:restarting', () => { state.restarting = true; toast('🔄 Ein Update wird eingespielt – gleich geht es weiter…'); });
 
@@ -106,7 +113,12 @@ function checkUpdate() {
   if (!v) return;
   if (sessionStorage.getItem('reloadedFor') === v) return; // schon versucht – keine Endlosschleife
   if (isBusy()) {
-    if (!state.updateNotified) { state.updateNotified = true; toast(`✨ Update v${esc(v)} ist da – die Seite lädt nach deinem Spiel kurz neu.`); }
+    if (!state.updateNotified) {
+      state.updateNotified = true;
+      toast(state.view === 'game' || state.game?.active
+        ? `✨ Update v${esc(v)} ist da. Spiel einfach weiter – die Seite aktualisiert sich von selbst, wenn du zurück in der Lobby bist.`
+        : `✨ Update v${esc(v)} ist da – wird gleich automatisch geladen.`);
+    }
     clearTimeout(state.updateTimer); state.updateTimer = setTimeout(checkUpdate, 2000);
     return;
   }

@@ -18,14 +18,15 @@ const VOTE_MS = 12000;
 const RECONNECT_MS = 45000;
 const RESTORE_MS = 90_000;      // nach einem Update: so lange haben beide Zeit, zurückzukommen
 const BOOT = Date.now();
-const handoffWindow = () => Date.now() - BOOT < 20 * 60_000;
+const freshBoot = () => Date.now() - BOOT < 20 * 60_000;
 
 // ---------------------------------------------------------------- Datenbank
 // Mit MONGODB_URI (z. B. kostenloses MongoDB Atlas) bleiben alle Profile bei Updates erhalten.
 // Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
 const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-let mongoUsers = null, mongoMusic = null, mongoMeta = null;
+let mongoUsers = null, mongoMusic = null, mongoGames = null;
+const INSTANCE = crypto.randomUUID(); // jede Server-Instanz hat eine eigene Kennung
 const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
 
 async function loadDb() {
@@ -35,7 +36,9 @@ async function loadDb() {
     await client.connect();
     mongoUsers = client.db(process.env.MONGODB_DB || 'schacharena').collection('users');
     mongoMusic = client.db(process.env.MONGODB_DB || 'schacharena').collection('music');
-    mongoMeta = client.db(process.env.MONGODB_DB || 'schacharena').collection('meta');
+    mongoGames = client.db(process.env.MONGODB_DB || 'schacharena').collection('games');
+    await mongoGames.createIndex({ id: 1 }, { unique: true });
+    await mongoGames.createIndex({ uids: 1 });
     await mongoMusic.createIndex({ id: 1 }, { unique: true });
     await mongoUsers.createIndex({ id: 1 }, { unique: true });
     for (const doc of await mongoUsers.find({}).toArray()) {
@@ -92,7 +95,7 @@ async function flush() {
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
     try { io.emit('server:restarting'); } catch { /* egal */ }
-    try { await saveHandoff(); } catch (e) { console.error('Partien konnten nicht übergeben werden:', e.message); }
+    try { await persistAllGames(); } catch (e) { console.error('Partien konnten nicht gespeichert werden:', e.message); }
     try { await flush(); } catch { /* egal */ }
     process.exit(0);
   });
@@ -323,6 +326,7 @@ function resolveVote(g) {
 function beginGame(g, board, decision) {
   g.board = board; g.boardDecision = decision; g.status = 'playing'; g.lastTick = Date.now();
   for (const c of ['w', 'b']) emitTo(g.players[c], 'game:start', gamePayload(g, g.players[c]));
+  persistGame(g);
 }
 
 function opponentOf(g, uid) { return g.players.w === uid ? g.players.b : g.players.w; }
@@ -333,6 +337,7 @@ function sendState(g, extra = {}) {
     const last = g.chess.history({ verbose: true }).at(-1);
     emitTo(uid, 'game:state', { id: g.id, fen: g.chess.fen(), lastMove: last ? { from: last.from, to: last.to, san: last.san } : null, clock: clockState(g), drawOffer: g.drawOffer, ...extra });
   }
+  persistGame(g);
 }
 
 function elo(ra, rb, score) {
@@ -378,6 +383,7 @@ function endGame(g, result, reason) {
     });
   }
   save();
+  unpersistGame(g);
   userGame.delete(W.id); userGame.delete(B.id);
   setTimeout(() => games.delete(g.id), 60_000);
   broadcastStats();
@@ -396,6 +402,7 @@ setInterval(() => {
   const now = Date.now();
   for (const g of games.values()) {
     if (g.status !== 'playing' || !g.timeMs || !g.started || g.paused) continue;
+    if (!online.has(g.players.w) && !online.has(g.players.b)) continue; // beide weg: Abbruch-Regel greift
     const t = g.chess.turn();
     if (g.clock[t] - (now - g.lastTick) <= 0) {
       g.clock[t] = 0; g.lastTick = now;
@@ -405,67 +412,99 @@ setInterval(() => {
 }, 200);
 
 // ---------------------------------------------------------------- Updates ohne Spielabbruch
-// Render startet bei einem Update erst den neuen Server und beendet dann den alten (SIGTERM).
-// Der alte Server speichert laufende Partien, der neue übernimmt sie, sobald die Spieler neu verbinden.
-async function saveHandoff() {
-  const now = Date.now();
-  const list = [...games.values()].filter((g) => g.status === 'playing' || g.status === 'vote').map((g) => {
-    const clock = { ...g.clock };
-    if (g.status === 'playing' && g.timeMs && g.started && !g.paused) clock[g.chess.turn()] -= now - g.lastTick;
-    const board = g.board || pick(Object.values(g.votes).length ? Object.values(g.votes) : g.voteOptions.map((o) => o.board));
-    return { id: g.id, source: g.source, players: g.players, moves: g.chess.history(), timeMs: g.timeMs, clock, started: g.started, board, boardDecision: g.boardDecision || 'zufall', drawOffer: g.drawOffer };
+// Jede laufende Partie wird nach jedem Zug in der Datenbank gespeichert (mit "owner" = Server-Instanz).
+// Verbindet sich ein Spieler nach einem Update mit dem neuen Server, übernimmt dieser die Partie.
+// Der alte Server merkt beim nächsten Speichern bzw. vor einer Abbruch-Wertung, dass sie ihm nicht mehr gehört.
+function snapshot(g) {
+  const clock = { ...g.clock };
+  if (g.status === 'playing' && g.timeMs && g.started && !g.paused) clock[g.chess.turn()] -= Date.now() - g.lastTick;
+  return {
+    id: g.id, uids: [g.players.w, g.players.b], source: g.source, players: g.players, moves: g.chess.history(),
+    timeMs: g.timeMs, clock, started: g.started, board: g.board, boardDecision: g.boardDecision, drawOffer: g.drawOffer,
+    owner: INSTANCE, updatedAt: Date.now(),
+  };
+}
+function persistGame(g) {
+  if (g.status !== 'playing' || g.lost) return g.persist;
+  const doc = snapshot(g);
+  g.persist = (g.persist || Promise.resolve()).then(async () => {
+    if (g.lost) return;
+    if (!mongoGames) { db.games ||= {}; db.games[g.id] = doc; save(); return; }
+    try { await mongoGames.replaceOne({ id: g.id, owner: INSTANCE }, doc, { upsert: true }); }
+    catch (e) { if (e.code === 11000) lostGame(g); else console.error('Partie speichern:', e.message); }
   });
-  const doc = { id: 'handoff', at: now, version: VERSION, games: list };
-  if (mongoMeta) await mongoMeta.replaceOne({ id: 'handoff' }, doc, { upsert: true });
-  else db.handoff = doc;
-  if (list.length) console.log(`♻️ ${list.length} laufende Partie(n) für den neuen Server gespeichert`);
+  return g.persist;
+}
+function unpersistGame(g) {
+  g.persist = (g.persist || Promise.resolve()).then(async () => {
+    if (g.lost) return;
+    if (!mongoGames) { if (db.games?.[g.id]) { delete db.games[g.id]; save(); } return; }
+    await mongoGames.deleteOne({ id: g.id, owner: INSTANCE }).catch(() => {});
+  });
+}
+async function persistAllGames() {
+  const list = [...games.values()].filter((g) => g.status === 'playing');
+  await Promise.all(list.map((g) => persistGame(g)));
+  if (list.length) console.log(`♻️ ${list.length} laufende Partie(n) gespeichert`);
+}
+// Gehört die Partie noch diesem Server? (Nach einem Update evtl. schon vom neuen übernommen)
+async function stillMine(g) {
+  if (!mongoGames) return true;
+  try { const d = await mongoGames.findOne({ id: g.id }); return !d || d.owner === INSTANCE; } catch { return true; }
+}
+// Partie ist jetzt auf einem anderen Server: hier ohne Wertung vergessen, Spieler neu verbinden lassen
+function lostGame(g) {
+  if (g.lost) return;
+  g.lost = true; g.status = 'over';
+  clearTimeout(g.voteTimer);
+  for (const t of Object.values(g.disconnect)) clearTimeout(t);
+  for (const uid of [g.players.w, g.players.b]) { if (userGame.get(uid) === g.id) userGame.delete(uid); emitTo(uid, 'server:reconnect'); }
+  games.delete(g.id);
+  console.log('↪️ Partie wurde von einem neuen Server übernommen:', g.id);
 }
 
-const restoredIds = new Set();
-let handoffJob = null;
-function restoreHandoff() {
-  if (!handoffWindow()) return Promise.resolve();
-  handoffJob ||= (async () => {
-    try {
-      const h = mongoMeta ? await mongoMeta.findOne({ id: 'handoff' }) : db.handoff;
-      if (!h?.games?.length || Date.now() - h.at > 10 * 60_000) return;
-      let n = 0;
-      for (const s of h.games) {
-        if (restoredIds.has(s.id) || games.has(s.id)) continue;
-        restoredIds.add(s.id);
-        const { w, b } = s.players;
-        if (!db.users[w] || !db.users[b] || userGame.has(w) || userGame.has(b)) continue;
-        const chess = new Chess();
-        try { for (const m of s.moves) chess.move(m); } catch { continue; }
-        const g = {
-          id: s.id, source: s.source, players: s.players, chess, timeMs: s.timeMs,
-          clock: { w: Math.max(1000, s.clock.w), b: Math.max(1000, s.clock.b) }, lastTick: Date.now(), started: s.started,
-          status: 'playing', votes: {}, board: s.board, boardDecision: s.boardDecision, drawOffer: s.drawOffer,
-          disconnect: {}, paused: true, restored: true, waitUntil: Date.now() + RESTORE_MS,
-        };
-        games.set(g.id, g); userGame.set(w, g.id); userGame.set(b, g.id);
-        for (const uid of [w, b]) if (!online.has(uid)) g.disconnect[uid] = setTimeout(() => absentAfterUpdate(g, uid), RESTORE_MS);
-        n++;
-      }
-      if (n) console.log(`♻️ ${n} laufende Partie(n) nach dem Update übernommen`);
-      if (mongoMeta) await mongoMeta.deleteOne({ id: 'handoff', at: h.at });
-      else if (db.handoff?.at === h.at) { delete db.handoff; save(); }
-    } catch (e) { console.error('Partien konnten nicht übernommen werden:', e.message); }
-    finally { setTimeout(() => { handoffJob = null; }, 2000); }
-  })();
-  return handoffJob;
+// Nach einem Update: laufende Partie dieses Spielers aus der Datenbank übernehmen
+async function adoptGameFor(uid) {
+  if (userGame.has(uid)) return;
+  let doc = mongoGames ? await mongoGames.findOne({ uids: uid }) : Object.values(db.games || {}).find((d) => d.uids?.includes(uid));
+  if (!doc) return;
+  const { _id, ...d } = doc;
+  const drop = async () => { if (mongoGames) await mongoGames.deleteOne({ id: d.id, owner: d.owner }).catch(() => {}); else { delete db.games[d.id]; save(); } };
+  if (Date.now() - d.updatedAt > 6 * 3600_000 || games.has(d.id) || d.owner === INSTANCE) return drop(); // alt oder schon beendet
+  const { w, b } = d.players;
+  if (!db.users[w] || !db.users[b] || userGame.has(w) || userGame.has(b)) return;
+  const chess = new Chess();
+  try { for (const m of d.moves) chess.move(m); } catch { return drop(); }
+  if (mongoGames) {
+    const r = await mongoGames.replaceOne({ id: d.id, owner: d.owner }, { ...d, owner: INSTANCE, updatedAt: Date.now() });
+    if (!r?.matchedCount) return; // jemand anderes war schneller
+  } else { db.games[d.id] = { ...d, owner: INSTANCE }; }
+  if (userGame.has(w) || userGame.has(b)) return;
+  const g = {
+    id: d.id, source: d.source, players: d.players, chess, timeMs: d.timeMs,
+    clock: { w: Math.max(1000, d.clock.w), b: Math.max(1000, d.clock.b) }, lastTick: Date.now(), started: d.started,
+    status: 'playing', votes: {}, board: d.board, boardDecision: d.boardDecision, drawOffer: d.drawOffer,
+    disconnect: {}, paused: true, restored: true, waitUntil: Date.now() + RESTORE_MS,
+  };
+  games.set(g.id, g); userGame.set(w, g.id); userGame.set(b, g.id);
+  for (const p of [w, b]) if (p !== uid && !online.has(p)) g.disconnect[p] = setTimeout(() => onAbsent(g, p), RESTORE_MS);
+  console.log('♻️ Partie nach Update übernommen:', g.id);
 }
 
-// Kommt nach einem Update nur einer zurück, verliert der andere wie beim Verlassen. Kommt keiner zurück: ohne Wertung beenden.
-function absentAfterUpdate(g, uid) {
+// Spieler ist (zu lange) weg: Abbruch-Regel – aber nur, wenn die Partie noch hier läuft
+async function onAbsent(g, uid) {
   delete g.disconnect[uid];
+  if (g.status === 'vote') resolveVote(g);
   if (g.status !== 'playing') return;
+  if (!(await stillMine(g))) return lostGame(g);
+  if (g.status !== 'playing' || online.has(uid)) return;
   const opp = opponentOf(g, uid);
   if (!online.has(opp)) {
+    // beide weg: ohne Wertung beenden
     g.status = 'over';
     for (const t of Object.values(g.disconnect)) clearTimeout(t);
     userGame.delete(g.players.w); userGame.delete(g.players.b); games.delete(g.id);
-    emitTo(opp, 'game:cancelled', {});
+    unpersistGame(g);
     return;
   }
   endGame(g, g.players.w === uid ? 'b' : 'w', 'abandon');
@@ -480,7 +519,7 @@ function resumeIfReady(g) {
 // Ein Spieler, der gerade noch auf dem alten Server war, hat dort evtl. neuere Daten (Münzen, Elo …)
 const refreshedUsers = new Set();
 async function refreshFromDb(u) {
-  if (!mongoUsers || !handoffWindow() || refreshedUsers.has(u.id)) return;
+  if (!mongoUsers || !freshBoot() || refreshedUsers.has(u.id)) return;
   refreshedUsers.add(u.id);
   if (lastSaved.get(u.id) !== JSON.stringify(u)) return; // hier schon geändert – nicht überschreiben
   const doc = await mongoUsers.findOne({ id: u.id });
@@ -519,13 +558,13 @@ io.on('connection', (socket) => {
 
   socket.on('auth', async ({ token } = {}, ack) => {
     let u = null;
-    try { u = await userByToken(token); if (u) await refreshFromDb(u); await restoreHandoff(); } catch (e) { console.error('auth:', e.message); }
+    try { u = await userByToken(token); if (u) { await refreshFromDb(u); await adoptGameFor(u.id); } } catch (e) { console.error('auth:', e.message); }
     if (!socket.connected) return;
     user = u || createUser();
     const old = online.get(user.id);
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
-    ack?.({ token: user.token, profile: priv(user), version: VERSION });
+    ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null });
     // Laufendes Spiel fortsetzen
     const gid = userGame.get(user.id);
     const g = gid && games.get(gid);
@@ -869,10 +908,7 @@ io.on('connection', (socket) => {
     if (g && g.status !== 'over') {
       const uid = user.id;
       emitTo(opponentOf(g, uid), 'game:opponent', { online: false, deadline: Date.now() + RECONNECT_MS });
-      g.disconnect[uid] = setTimeout(() => {
-        if (g.status === 'vote') { resolveVote(g); }
-        if (g.status === 'playing') endGame(g, g.players.w === uid ? 'b' : 'w', 'abandon');
-      }, RECONNECT_MS);
+      g.disconnect[uid] = setTimeout(() => onAbsent(g, uid), RECONNECT_MS);
     }
     broadcastStats();
   });
