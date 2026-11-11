@@ -661,3 +661,6 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
 .bot-card.legend::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; background: conic-gradient(from var(--a, 0deg), #a855f7, #22d3ee, #f472b6, #a855f7); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: frSpin 4s linear infinite; pointer-events: none; }
 .bot-card.legend h3 { background: linear-gradient(100deg, #c084fc, #fff 45%, #22d3ee 55%, #c084fc); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: adminShine 3s linear infinite; }
 .bot-card .inf { font-size: 18px; color: #e9d5ff; text-shadow: 0 0 10px #a855f7; }
+.queen-btn { margin-top: -6px; background: linear-gradient(120deg, rgba(245, 197, 66, .18), rgba(192, 132, 252, .18)); border: 1px solid rgba(245, 197, 66, .55); color: #fde68a; display: grid; gap: 1px; }
+.queen-btn small { font-weight: 500; font-size: 11px; color: var(--muted); }
+.queen-btn:hover { box-shadow: 0 0 22px -4px rgba(245, 197, 66, .7); }

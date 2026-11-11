@@ -608,15 +608,21 @@ async function mateFx() {
   await wait(1100);
 }
 
-function captured(fen) {
-  const start = { p: 8, n: 2, b: 2, r: 2, q: 1 };
-  const vals = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+function countPieces(fen) {
   const cnt = { w: { p: 0, n: 0, b: 0, r: 0, q: 0 }, b: { p: 0, n: 0, b: 0, r: 0, q: 0 } };
-  for (const ch of fen.split(' ')[0]) { const l = ch.toLowerCase(); if (start[l] != null) cnt[ch === l ? 'b' : 'w'][l]++; }
+  for (const ch of fen.split(' ')[0]) { const l = ch.toLowerCase(); if (cnt.w[l] != null) cnt[ch === l ? 'b' : 'w'][l]++; }
+  return cnt;
+}
+function captured(fen) {
+  const vals = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+  const cnt = countPieces(fen);
+  const start = countPieces(!state.game && state.bot?.startFen ? state.bot.startFen : START_FEN);
   const mat = (c) => Object.entries(cnt[c]).reduce((s, [t, n]) => s + n * vals[t], 0);
-  // Von Farbe c geschlagene Figuren = fehlende gegnerische Figuren
-  const taken = (c) => { const o = c === 'w' ? 'b' : 'w'; const out = []; for (const t of ['q', 'r', 'b', 'n', 'p']) for (let i = cnt[o][t]; i < start[t]; i++) out.push([t, o]); return out; };
-  return { taken, diff: mat('w') - mat('b') };
+  // Von Farbe c geschlagene Figuren = fehlende gegnerische Figuren (gemessen an der Startstellung)
+  const taken = (c) => { const o = c === 'w' ? 'b' : 'w'; const out = []; for (const t of ['q', 'r', 'b', 'n', 'p']) for (let i = cnt[o][t]; i < start[o][t]; i++) out.push([t, o]); return out; };
+  const startDiff = Object.keys(vals).reduce((s, t) => s + (start.w[t] - start.b[t]) * vals[t], 0);
+  return { taken, diff: mat('w') - mat('b') - startDiff };
 }
 
 function renderBar(el, player, color, { clock = null, thinking = false, tag = '' } = {}) {
@@ -903,7 +909,7 @@ function showResult({ outcome, reason, coins, rating, online, bot, training = fa
   const coinLabel = outcome === 'loss' && coins > 0 ? 'Trostgeld' : 'Münzen';
   const ov = openOverlay(`<div class="result-head ${outcome}"><div class="result-icon">${icon}</div><h2>${title}</h2><p class="muted">${REASONS[reason] || ''}</p></div>
     <div class="reward">
-      ${training ? '<span class="pill">🎓 Training – ohne Münzen</span>' : `<span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${coins}</b> ${coinLabel}</span>`}
+      ${training ? `<span class="pill">${training === 'queens' ? '👑 Queen-Modus – nur zum Spaß' : '🎓 Training – ohne Münzen'}</span>` : `<span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${coins}</b> ${coinLabel}</span>`}
       ${online ? `<span class="pill" style="color:${rating >= 0 ? 'var(--good)' : 'var(--bad)'}"><b>${rating >= 0 ? '+' : ''}${rating}</b> Elo</span>` : ''}
     </div>
     ${outcome === 'win' && reason === 'checkmate' ? '' : outcome === 'win' ? '<p class="muted" style="text-align:center;font-size:13px;margin-top:16px">Tipp: Gewinne per Schachmatt, um deinen 3D-Finisher zu sehen!</p>' : ''}
@@ -919,7 +925,7 @@ function showResult({ outcome, reason, coins, rating, online, bot, training = fa
     if (r === 'lobby') go('play');
     if (r === 'again') { go('play'); $('#search-btn')?.click(); }
     if (r === 'bots') go('bots');
-    if (r === 'rematch' && bot) startBot(bot.id);
+    if (r === 'rematch' && bot) startBot(bot.id, { queens: !!state.lastQueens });
   });
 }
 
@@ -949,11 +955,13 @@ function renderBots() {
         <blockquote>„${esc(b.quote)}"</blockquote>
         <div class="bot-meta"><span>Sieg: <b>${state.training ? '<span class="muted">Training</span>' : coinHTML(b.reward)}</b></span><span>Finisher: <b>${FINISHERS.find((f) => f.id === b.finisher).icon}</b></span></div>
         <button class="btn primary block" data-bot="${b.id}">Herausfordern</button>
+        ${b.legend ? `<button class="btn block queen-btn" data-queens="${b.id}">👑 Queen-Modus <small>alle deine Figuren sind Damen</small></button>` : ''}
       </div>`).join('')}</div>`;
   const pickColor = () => $$('#color-pick button').forEach((b) => b.classList.toggle('on', b.dataset.c === state.botColor));
   $$('#color-pick button').forEach((b) => b.onclick = () => { state.botColor = b.dataset.c; pickColor(); });
   pickColor();
   $$('[data-bot]', root).forEach((b) => b.onclick = () => startBot(+b.dataset.bot));
+  $$('[data-queens]', root).forEach((b) => b.onclick = () => startBot(+b.dataset.queens, { queens: true }));
   $('#train-toggle', root).onclick = () => {
     state.training = !state.training;
     localStorage.setItem('training', state.training ? '1' : '0');
@@ -1020,12 +1028,20 @@ function getWorker() {
   return worker;
 }
 
-function startBot(id) {
+// Queen-Modus: alle eigenen Figuren außer dem König sind Damen (15 Stück!)
+function queenFen(color) {
+  return color === 'w'
+    ? 'rnbqkbnr/pppppppp/8/8/8/8/QQQQQQQQ/QQQQKQQQ w - - 0 1'
+    : 'qqqqkqqq/qqqqqqqq/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1';
+}
+function startBot(id, { queens = false } = {}) {
   if (state.game?.active) return toast('Du bist gerade in einem Online-Spiel.', 'warn');
   const bot = BOTS.find((b) => b.id === id);
   const color = state.botColor === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : state.botColor;
   state.game = null;
-  state.bot = { bot, color, chess: new Chess(), moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId, training: !!state.training, eval: 0 };
+  const startFen = queens ? queenFen(color) : null;
+  state.lastQueens = queens;
+  state.bot = { bot, color, chess: startFen ? new Chess(startFen) : new Chess(), startFen, queens, moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId, training: !!state.training, eval: 0 };
   clearHint();
   const p = state.profile;
   setupBoardLook(p.equipped.board, { w: p.equipped.pieces, b: p.equipped.pieces }, color);
@@ -1042,7 +1058,7 @@ function botPlayer(b) { return { name: b.name, avatar: { type: 'emoji', value: b
 function renderBotGame() {
   const s = state.bot; if (!s) return;
   const opp = s.color === 'w' ? 'b' : 'w';
-  renderBar($('#bar-top'), botPlayer(s.bot), opp, { thinking: s.thinking, tag: s.training ? '🎓 Training' : s.bot.level });
+  renderBar($('#bar-top'), botPlayer(s.bot), opp, { thinking: s.thinking, tag: s.queens ? '👑 Queen-Modus' : s.training ? '🎓 Training' : s.bot.level });
   renderBar($('#bar-bottom'), state.profile, s.color, { tag: 'Du' });
   const turn = s.chess.turn();
   $('#bar-top').classList.toggle('turn', !s.over && turn === opp);
@@ -1059,7 +1075,7 @@ function renderBotGame() {
   if (s.training && !s.over) renderEval();
   const hb = $('#hint-btn'); if (hb) hb.onclick = showHint;
   $('#emotes').hidden = true;
-  const again = $('#bot-again'); if (again) again.onclick = () => startBot(s.bot.id);
+  const again = $('#bot-again'); if (again) again.onclick = () => startBot(s.bot.id, { queens: s.queens });
   const undo = $('#undo-btn'); if (undo) undo.onclick = () => {
     const n = s.chess.turn() === s.color ? 2 : 1;
     for (let i = 0; i < n && s.moves.length; i++) { s.chess.undo(); s.moves.pop(); s.fens.pop(); delete s.marks[s.chess.history().length]; }
@@ -1134,7 +1150,7 @@ async function finishBot(resigned) {
   renderBotGame();
   setStatus(outcome === 'win' ? '🏆 Gewonnen!' : outcome === 'loss' ? '❌ Verloren' : '🤝 Remis');
   clearHint();
-  const req = s.training ? Promise.resolve({ coins: 0 }) : emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned });
+  const req = s.training || s.queens ? Promise.resolve({ coins: 0 }) : emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned });
   if (reason === 'checkmate') {
     await mateFx();
     const { playFinisher } = await import('./finisher.js');
@@ -1147,7 +1163,7 @@ async function finishBot(resigned) {
   if (reason === 'resign') await throwBoard();
   const r = await req;
   if (r?.profile) setProfile(r.profile, { coinsAnim: true });
-  showResult({ outcome, reason, coins: r?.coins ?? 0, bot: s.bot, training: s.training });
+  showResult({ outcome, reason, coins: r?.coins ?? 0, bot: s.bot, training: s.training ? 'training' : s.queens ? 'queens' : false });
 }
 
 // ================================================================ Shop

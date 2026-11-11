@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.8.0';
+export const VERSION = '1.8.1';
 export const VERSION_DATE = '2026-11-11';
 export const CHANGELOG = [
+  ['1.8.1', 'Queen-Modus gegen Hugo: alle deine Figuren außer dem König sind Damen'],
   ['1.8.0', 'Online-Sieg bringt 200 Münzen, Trainingsmodus bei den Bots (Tipps, Stellungsbewertung, Züge zurücknehmen), neuer Bot Hugo mit ∞ Elo – der stärkste von allen'],
   ['1.7.4', 'Laufende Partien werden nach jedem Zug gespeichert und überstehen jetzt jedes Update und manuelles Neuladen, klarere Update-Meldung'],
   ['1.7.3', 'Profile öffnen sofort, Profilsong startet schneller (Streaming) und hört beim Schließen oder Tab-Wechsel garantiert auf, Finisher starten schneller (3D vorgeladen, Seite komprimiert), Rangliste nur mit Spielern, die schon online gespielt haben'],
