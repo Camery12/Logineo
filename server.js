@@ -149,7 +149,10 @@ function migrateUsers() {
 }
 
 const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins } });
-const priv = (u) => ({ ...pub(u), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30) });
+// Admins: per Spielercode (fest, nicht änderbar). Weitere über ADMIN_CODES="code1,code2" bei Render.
+const ADMIN_CODES = new Set(String(process.env.ADMIN_CODES || '58525408').split(',').map((s) => s.trim()).filter(Boolean));
+const isAdmin = (u) => !!u && ADMIN_CODES.has(u.code);
+const priv = (u) => ({ ...pub(u), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30), admin: isAdmin(u) });
 // Öffentliches Profil (zum Anklicken in Rangliste / Match)
 const publicProfile = (u) => ({
   ...pub(u), stats: { ...u.stats }, createdAt: u.createdAt, online: online.has(u.id),
@@ -432,6 +435,33 @@ io.on('connection', (socket) => {
   }));
 
   // --- Profil eines anderen Spielers ansehen
+  // --- Admin-Menü: Spieler suchen und Münzen geben/abziehen (nur für Admins, Server prüft jedes Mal)
+  const findTarget = (q) => {
+    const s = String(q || '').trim();
+    if (/^\d{8}$/.test(s)) return byCode.get(s) || null;
+    return byName.get(nameKey(s.replace(/^@/, ''))) || null;
+  };
+  socket.on('admin:find', need(({ query } = {}, ack) => {
+    if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
+    const t = findTarget(query);
+    if (!t) return ack?.({ error: 'Kein Spieler mit diesem Code oder Namen gefunden.' });
+    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) } });
+  }));
+  socket.on('admin:coins', need(({ query, amount } = {}, ack) => {
+    if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
+    const t = findTarget(query);
+    const n = Math.trunc(Number(amount));
+    if (!t) return ack?.({ error: 'Kein Spieler mit diesem Code oder Namen gefunden.' });
+    if (!Number.isFinite(n) || n === 0 || Math.abs(n) > 1_000_000) return ack?.({ error: 'Betrag muss zwischen -1.000.000 und 1.000.000 liegen (nicht 0).' });
+    t.coins = Math.max(0, t.coins + n);
+    console.log(`[admin] ${user.name} (${user.code}) -> ${t.name} (${t.code}): ${n > 0 ? '+' : ''}${n} Münzen, neu ${t.coins}`);
+    save();
+    // Empfänger sieht es sofort, falls online
+    emitTo(t.id, 'profile:refresh', { profile: priv(t) });
+    emitTo(t.id, 'toast', { type: 'good', text: n > 0 ? `🎁 Du hast ${n} Münzen von einem Admin bekommen!` : `Ein Admin hat ${-n} Münzen abgezogen.` });
+    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) }, profile: t === user ? priv(user) : undefined });
+  }));
+
   socket.on('profile:get', ({ id } = {}, ack) => {
     const u = db.users[id];
     ack?.(u ? { profile: publicProfile(u) } : { error: 'Spieler nicht gefunden.' });

@@ -82,6 +82,7 @@ function setProfile(p, { coinsAnim = false } = {}) {
   else cc.textContent = fmtNum(p.coins);
   $('#me-btn').innerHTML = `${avatar(p.avatar, 30)}<span>${esc(p.name)}</span>`;
   $('#login-btn').hidden = !!p.registered;
+  $('#admin-btn').hidden = !p.admin;
   renderFooter();
   // Hero-Brett passt sich sofort an neue Skins an
   if (JSON.stringify(p.equipped) !== skinsBefore) renderHeroBoard();
@@ -157,6 +158,41 @@ function logout() {
   });
 }
 $('#login-btn').onclick = () => openAuth('login');
+
+// ================================================================ Admin-Menü (nur für Admins sichtbar, Server prüft zusätzlich)
+socket.on('profile:refresh', ({ profile }) => { if (profile) setProfile(profile, { coinsAnim: true }); });
+$('#admin-btn').onclick = () => {
+  const ov = openOverlay(`<div class="admin">
+    <h2>🛠️ Admin-Menü</h2><p class="muted small">Spieler per Spielercode (8 Ziffern) oder Benutzername finden und Münzen geben.</p>
+    <form id="adm-find" class="adm-row"><input id="adm-q" placeholder="z. B. 58525408 oder loldonatforever" autocomplete="off"><button class="btn primary">Suchen</button></form>
+    <div id="adm-player"></div>
+    <div class="modal-actions"><button class="btn" data-x>Schließen</button></div></div>`, { wide: true });
+  $('[data-x]', ov.el).onclick = ov.close;
+  const show = (pl) => {
+    $('#adm-player', ov.el).innerHTML = `<div class="adm-card">
+      <div class="adm-who">${avatar(pl.avatar, 48)}<div><b>@${esc(pl.name)}</b> ${pl.online ? '<i class="dot"></i>' : ''}<div class="muted small">Code ${pl.code} · ${pl.rating} Elo</div></div>
+        <span class="pill coin-pill"><i class="coin"></i><b id="adm-coins">${fmtNum(pl.coins)}</b></span></div>
+      <div class="adm-quick">${[100, 500, 1000, 5000, 10000].map((n) => `<button class="btn gold sm" data-amt="${n}">+${fmtNum(n)}</button>`).join('')}</div>
+      <form id="adm-custom" class="adm-row"><input id="adm-amt" type="number" placeholder="Eigener Betrag (minus zum Abziehen)"><button class="btn primary">Ausführen</button></form>
+    </div>`;
+    const give = async (amount) => {
+      const r = await emit('admin:coins', { query: pl.code, amount });
+      if (r.error) return toast(esc(r.error), 'warn');
+      if (r.profile) setProfile(r.profile, { coinsAnim: true });
+      toast(`✅ @${esc(r.player.name)}: ${amount > 0 ? '+' : ''}${fmtNum(amount)} Münzen (jetzt ${fmtNum(r.player.coins)})`, 'good');
+      show(r.player);
+    };
+    $$('[data-amt]', ov.el).forEach((b) => b.onclick = () => give(+b.dataset.amt));
+    $('#adm-custom', ov.el).onsubmit = (e) => { e.preventDefault(); const n = +$('#adm-amt', ov.el).value; if (n) give(n); };
+  };
+  $('#adm-find', ov.el).onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await emit('admin:find', { query: $('#adm-q', ov.el).value });
+    if (r.error) { $('#adm-player', ov.el).innerHTML = `<p class="form-error">${esc(r.error)}</p>`; return; }
+    show(r.player);
+  };
+  setTimeout(() => $('#adm-q', ov.el).focus(), 50);
+};
 
 // ================================================================ Profile anderer Spieler ansehen
 async function showPlayerProfile(id) {

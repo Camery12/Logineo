@@ -461,3 +461,12 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
 .hero-board { perspective: 1000px; }
 .hero-tilt { transition: transform .35s cubic-bezier(.2, .8, .3, 1), filter .35s; transform-style: preserve-3d; will-change: transform; }
 .hero-tilt.near { filter: drop-shadow(0 30px 40px rgba(124, 92, 255, .25)); }
+
+/* ---------- Admin-Menü */
+.adm-row { display: flex; gap: 8px; margin-top: 14px; }
+.adm-row input { flex: 1; min-width: 0; padding: 12px 14px; border-radius: 12px; background: rgba(0, 0, 0, .3); border: 1px solid var(--line); color: var(--text); font-size: 16px; outline: none; }
+.adm-row input:focus { border-color: var(--accent); }
+.adm-card { margin-top: 16px; padding: 16px; border-radius: 16px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); }
+.adm-who { display: flex; align-items: center; gap: 12px; }
+.adm-who .pill { margin-left: auto; }
+.adm-quick { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
