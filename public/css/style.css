@@ -380,13 +380,13 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
 
 /* ---------- Brett-Effekte (v1.2) */
 .fx-canvas { position: absolute; inset: -8%; width: 116%; height: 116%; pointer-events: none; z-index: 25; }
-.piece.land { animation: land .32s cubic-bezier(.3, 1.6, .5, 1); }
-@keyframes land { 0% { scale: 1.18; filter: drop-shadow(0 14px 10px rgba(0, 0, 0, .45)); } 55% { scale: .92 1.06; } 100% { scale: 1; } }
+.piece.land { animation: land .22s ease-out; }
+@keyframes land { 0% { scale: 1.05; filter: drop-shadow(0 6px 5px rgba(0, 0, 0, .3)); } 100% { scale: 1; filter: none; } }
 .piece.promo-glow { animation: promoGlow 1s ease-out; }
 @keyframes promoGlow { 0% { filter: drop-shadow(0 0 0 #ffd166) brightness(2.2); scale: 1.4; } 100% { filter: drop-shadow(0 0 0 transparent); scale: 1; } }
 .board-frame.shake-s { animation: shakeS .3s; }
 .board-frame.shake-l { animation: shakeL .6s; }
-@keyframes shakeS { 20% { transform: translate(-3px, 1px); } 40% { transform: translate(3px, -2px); } 60% { transform: translate(-2px, 2px); } 80% { transform: translate(2px, 0); } }
+@keyframes shakeS { 25% { transform: translate(-1.5px, .5px); } 50% { transform: translate(1.5px, -1px); } 75% { transform: translate(-1px, .5px); } }
 @keyframes shakeL { 10% { transform: translate(-9px, 3px) rotate(-.6deg); } 25% { transform: translate(8px, -5px) rotate(.5deg); } 40% { transform: translate(-6px, 4px); } 60% { transform: translate(5px, -2px); } 80% { transform: translate(-2px, 1px); } }
 .board-frame.check-flash::after { content: ""; position: absolute; inset: 0; border-radius: 16px; pointer-events: none; box-shadow: 0 0 0 3px #ff2d55, 0 0 60px 10px rgba(255, 45, 85, .55); animation: checkFlash .7s ease-out forwards; z-index: 30; }
 @keyframes checkFlash { to { opacity: 0; } }

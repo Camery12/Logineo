@@ -6,3 +6,6 @@ services:
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /
+    envVars:
+      - key: MONGODB_URI   # Verbindungs-Adresse von MongoDB Atlas (im Render-Dashboard eintragen)
+        sync: false

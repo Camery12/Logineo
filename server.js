@@ -14,24 +14,80 @@ const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'db.json');
 const VOTE_MS = 12000;
 const RECONNECT_MS = 45000;
 
-// ---------------------------------------------------------------- Datenbank (JSON-Datei)
+// ---------------------------------------------------------------- Datenbank
+// Mit MONGODB_URI (z. B. kostenloses MongoDB Atlas) bleiben alle Profile bei Updates erhalten.
+// Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
+const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch { /* neue DB */ }
-db.users ||= {};
-let saveTimer = null;
+let mongoUsers = null;
+const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
+
+async function loadDb() {
+  if (MONGO_URI) {
+    const { MongoClient } = await import('mongodb');
+    const client = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 15000 });
+    await client.connect();
+    mongoUsers = client.db(process.env.MONGODB_DB || 'schacharena').collection('users');
+    await mongoUsers.createIndex({ id: 1 }, { unique: true });
+    for (const doc of await mongoUsers.find({}).toArray()) {
+      const { _id, ...u } = doc;
+      db.users[u.id] = u;
+      lastSaved.set(u.id, JSON.stringify(u));
+    }
+    console.log(`✅ MongoDB verbunden – ${Object.keys(db.users).length} Spieler geladen`);
+  } else {
+    try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch { /* neue DB */ }
+    db.users ||= {};
+    console.log(`⚠️  Keine MONGODB_URI gesetzt – speichere in ${DB_FILE} (geht bei Render-Free bei Updates verloren)`);
+  }
+}
+
+let saveTimer = null, saving = false, saveAgain = false;
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
+  saveTimer = setTimeout(flush, 400);
+}
+async function flush() {
+  clearTimeout(saveTimer);
+  if (!mongoUsers) {
     fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
     const tmp = DB_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(db));
     fs.renameSync(tmp, DB_FILE);
-  }, 400);
+    return;
+  }
+  if (saving) { saveAgain = true; return; }
+  saving = true;
+  try {
+    const ops = [], pending = [];
+    for (const u of Object.values(db.users)) {
+      const json = JSON.stringify(u);
+      if (lastSaved.get(u.id) === json) continue;
+      ops.push({ replaceOne: { filter: { id: u.id }, replacement: JSON.parse(json), upsert: true } });
+      pending.push([u.id, json]);
+    }
+    if (ops.length) {
+      await mongoUsers.bulkWrite(ops, { ordered: false });
+      for (const [id, json] of pending) lastSaved.set(id, json);
+    }
+  } catch (e) {
+    console.error('Speichern in MongoDB fehlgeschlagen, neuer Versuch gleich:', e.message);
+    setTimeout(save, 3000);
+  } finally {
+    saving = false;
+    if (saveAgain) { saveAgain = false; save(); }
+  }
+}
+// Render beendet den alten Server bei jedem Update mit SIGTERM: vorher alles speichern
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, async () => {
+    try { await flush(); } catch { /* egal */ }
+    process.exit(0);
+  });
 }
 
 const byToken = new Map();
 const byCode = new Map();
-for (const u of Object.values(db.users)) { byToken.set(u.token, u); byCode.set(u.code, u); }
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const digits = (n) => Array.from({ length: n }, (_, i) => (i === 0 ? 1 + crypto.randomInt(9) : crypto.randomInt(10))).join('');
@@ -427,4 +483,11 @@ io.on('connection', (socket) => {
   });
 });
 
+try {
+  await loadDb();
+} catch (e) {
+  console.error('❌ Datenbank konnte nicht geladen werden:', e.message);
+  process.exit(1); // lieber neu starten als mit leerer Datenbank alles zu überschreiben
+}
+for (const u of Object.values(db.users)) { byToken.set(u.token, u); byCode.set(u.code, u); }
 server.listen(PORT, () => console.log(`♞ SchachArena läuft auf http://localhost:${PORT}`));

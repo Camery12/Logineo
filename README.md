@@ -11,7 +11,12 @@ npm start
 
 Danach im Browser **http://localhost:3000** öffnen. Für ein Testspiel gegen dich selbst öffnest du einen zweiten Browser (oder ein Inkognito-Fenster), weil jedes Fenster ein eigenes Profil hat.
 
-Optionale Umgebungsvariablen: `PORT` (Standard 3000) und `DB_FILE` (Standard `data/db.json`).
+Optionale Umgebungsvariablen:
+
+- `PORT` (Standard 3000)
+- `MONGODB_URI`: Verbindungs-Adresse einer MongoDB, z. B. kostenlos von MongoDB Atlas. Damit bleiben Profile, Münzen und die Rangliste bei Updates und Neustarts erhalten. Ohne diese Variable speichert der Server in einer Datei, und die geht bei Render-Free bei jedem Update verloren.
+- `MONGODB_DB`: Name der Datenbank (Standard `schacharena`)
+- `DB_FILE`: Pfad der Datei, wenn keine MongoDB gesetzt ist (Standard `data/db.json`)
 
 ## Funktionen
 
