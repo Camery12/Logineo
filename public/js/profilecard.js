@@ -54,7 +54,7 @@ export function profileCardHTML(u, { own = false } = {}) {
       </div>
       <div class="pc-elo"><b>${u.rating ?? 0}</b><span>Elo</span></div>
     </div>
-    ${u.music ? `<div class="pc-music"><button class="pc-play" data-music="${esc(u.id)}">▶</button><div class="pc-mtitle"><span class="muted small">🎵 Profilsong</span><b>${esc(u.music.title)}</b></div><div class="pc-eq"><i></i><i></i><i></i><i></i></div><input class="pc-vol" type="range" min="0" max="100" value="70" title="Lautstärke"></div>` : ''}
+    ${u.music ? `<div class="pc-music"><button class="pc-play" data-music="${esc(u.id)}" data-v="${u.music.at || 0}" data-vol="${u.music.volume ?? 0.6}">▶</button><div class="pc-mtitle"><span class="muted small">🎵 Profilsong</span><b>${esc(u.music.title)}</b></div><div class="pc-eq"><i></i><i></i><i></i><i></i></div><input class="pc-vol" type="range" min="0" max="100" value="70" title="Lautstärke"></div>` : ''}
     <div class="pc-stats">
       <div><b>${s.games || 0}</b><span>Partien</span></div><div><b style="color:var(--good)">${s.wins || 0}</b><span>Siege</span></div>
       <div><b style="color:var(--bad)">${s.losses || 0}</b><span>Niederlagen</span></div><div><b>${rate}%</b><span>Siegquote</span></div>
@@ -70,30 +70,62 @@ export function profileCardHTML(u, { own = false } = {}) {
   </div>`;
 }
 
-// Profilsong abspielen – Lautstärke ist hart begrenzt (MUSIC_MAX_VOLUME)
-let current = null;
-export function stopProfileMusic() { if (current) { current.audio.pause(); current.audio.src = ''; current = null; } }
+// Profilsong abspielen – Lautstärke ist hart begrenzt (MUSIC_MAX_VOLUME).
+// Der Song kommt als normale Audiodatei (/music/<id>) und startet, sobald die ersten Sekunden da sind.
+let current = null, watchdog = 0;
+const visible = (el) => el.isConnected && el.getClientRects().length > 0 && !document.hidden;
+export function stopProfileMusic() {
+  clearInterval(watchdog);
+  if (!current) return;
+  const a = current.audio; current = null;
+  a.pause(); a.removeAttribute('src'); a.load();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!current) return;
+  if (document.hidden) { current.wasPlaying = !current.audio.paused; current.audio.pause(); current.setPlaying(false); }
+  else if (current.wasPlaying && visible(current.root)) current.audio.play().then(() => current?.setPlaying(true)).catch(() => {});
+});
 export function wireProfileMusic(root, emit, { autoplay = true } = {}) {
   const btn = root.querySelector('[data-music]');
   if (!btn) return;
   const vol = root.querySelector('.pc-vol');
   const box = root.querySelector('.pc-music');
-  let audio = null, loading = false, ownerVol = 0.6;
+  const ownerVol = btn.dataset.vol !== undefined ? Number(btn.dataset.vol) : 0.6;
+  let audio = null;
   const muted = () => localStorage.getItem('profileMusicMuted') === '1';
   const apply = () => { if (audio) audio.volume = Math.min(MUSIC_MAX_VOLUME, MUSIC_MAX_VOLUME * ownerVol * (vol.value / 100)); };
   const setPlaying = (p) => { btn.textContent = p ? '❚❚' : '▶'; box.classList.toggle('playing', p); };
-  const start = async () => {
-    if (audio) { if (audio.paused) { audio.play().then(() => setPlaying(true)).catch(() => {}); localStorage.setItem('profileMusicMuted', '0'); } else { audio.pause(); setPlaying(false); localStorage.setItem('profileMusicMuted', '1'); } return; }
-    if (loading) return; loading = true; btn.textContent = '…';
-    const r = await emit('music:get', { id: btn.dataset.music });
-    loading = false;
-    if (!r.data) { btn.textContent = '✕'; return; }
+  const mine = () => current?.audio === audio;
+  const ensure = () => {
+    if (audio && mine()) return;
     stopProfileMusic();
-    audio = new Audio(r.data); audio.loop = true; ownerVol = r.volume ?? 0.6; apply();
-    current = { audio };
-    audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    audio = new Audio();
+    audio.loop = true; audio.preload = 'auto';
+    audio.src = `/music/${encodeURIComponent(btn.dataset.music)}?v=${btn.dataset.v}`;
+    apply();
+    audio.onwaiting = () => { if (mine()) btn.textContent = '…'; };
+    audio.onplaying = () => { if (mine()) setPlaying(true); };
+    audio.onerror = () => { if (mine()) { btn.textContent = '✕'; box.classList.remove('playing'); } };
+    current = { audio, root, setPlaying };
+    // Läuft die Musik noch, obwohl das Profil zu ist (oder verdeckt)? Dann sofort aus.
+    clearInterval(watchdog);
+    watchdog = setInterval(() => { if (current && !document.hidden && !visible(current.root)) { stopProfileMusic(); } }, 300);
   };
-  btn.onclick = () => start();
+  const play = () => {
+    if (!visible(root)) return;
+    ensure();
+    btn.textContent = '…';
+    const a = audio;
+    a.play().then(() => {
+      if (current?.audio !== a || !visible(root)) { a.pause(); return; }
+      setPlaying(true);
+    }).catch(() => { if (current?.audio === a) setPlaying(false); });
+  };
+  btn.onclick = () => {
+    if (audio && mine() && !audio.paused) { audio.pause(); setPlaying(false); localStorage.setItem('profileMusicMuted', '1'); return; }
+    localStorage.setItem('profileMusicMuted', '0');
+    play();
+  };
   vol.oninput = apply;
-  if (autoplay && !muted()) start();
+  if (autoplay && !muted()) play();
 }

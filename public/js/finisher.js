@@ -228,7 +228,32 @@ export function playFinisher(opts) {
   });
 }
 
-function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { w: 'klassisch', b: 'klassisch' }, loserColor = 'b', winnerName = '', subtitle, attackerSq = null }, done) {
+// Ein gemeinsamer WebGL-Renderer für alle Finisher: Shader und Umgebungslicht werden nur einmal
+// gebaut – dadurch startet jeder weitere Finisher sofort.
+let shared = null;
+
+function getShared() {
+  if (shared && !shared.renderer.getContext().isContextLost()) return shared;
+  const canvas = document.createElement('canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  pmrem.dispose();
+  shared = { canvas, renderer, env };
+  return shared;
+}
+
+// Im Hintergrund vorbereiten (unsichtbar): Renderer, Umgebungslicht und die wichtigsten Shader
+let warmed = false;
+export function warmupFinisher(opts = {}) {
+  if (warmed) return Promise.resolve();
+  warmed = true;
+  return new Promise((resolve) => {
+    try { run({ fen: 'r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4', ...opts, warm: true }, resolve); } catch (e) { console.warn(e); resolve(); }
+  });
+}
+
+function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { w: 'klassisch', b: 'klassisch' }, loserColor = 'b', winnerName = '', subtitle, attackerSq = null, warm = false }, done) {
   const info = FINISHERS.find((f) => f.id === finisher) || FINISHERS[0];
   const overlay = document.createElement('div');
   overlay.className = 'finisher';
@@ -236,14 +261,15 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     <div class="fx-title"><div class="fx-main">${'SCHACHMATT'.split('').map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join('')}</div><div class="fx-sub"></div></div>
     <div class="fx-lines"></div>
     <div class="fx-flash"></div><div class="fx-tag"><span>${info.icon}</span> Finisher: ${info.name}</div><button class="fx-skip">Überspringen ›</button>`;
+  if (warm) overlay.style.cssText = 'visibility:hidden;pointer-events:none';
   document.body.appendChild(overlay);
-  const canvas = overlay.querySelector('canvas');
   const flashEl = overlay.querySelector('.fx-flash');
-  requestAnimationFrame(() => overlay.classList.add('on'));
+  if (!warm) requestAnimationFrame(() => overlay.classList.add('on'));
 
-  let renderer;
-  try { renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' }); }
+  let renderer, sh;
+  try { sh = getShared(); renderer = sh.renderer; overlay.querySelector('canvas').replaceWith(sh.canvas); }
   catch {
+    if (warm) { overlay.remove(); done(); return; }
     overlay.classList.add('title-on');
     setTimeout(() => { overlay.remove(); done(); }, 2500);
     return;
@@ -262,8 +288,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   const bg = new THREE.Color('#07080d');
   scene.background = bg;
   scene.fog = new THREE.Fog(bg, 14, 34);
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environment = sh.env;
   const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.05, 100);
 
   const composer = new EffectComposer(renderer);
@@ -417,6 +442,26 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     if (slow) { ctx.timeScale = 0.22; fx.slowRecover = 1; }
     overlay.classList.remove('hit'); void overlay.offsetWidth; overlay.classList.add('hit');
   };
+  // Aufräumen: alles außer Renderer, Umgebungslicht und Shadern (die bleiben für den nächsten Finisher)
+  function teardown() {
+    const geos = new Set(Object.values(geoCache));
+    scene.traverse((o) => {
+      if (o.geometry && !geos.has(o.geometry)) o.geometry.dispose?.();
+      if (o.isLight) o.dispose?.();
+      for (const m of [].concat(o.material || [])) for (const v of Object.values(m)) if (v?.isTexture && v !== sh.env) v.dispose();
+    });
+    for (const ps of composer.passes) ps.dispose?.();
+    composer.dispose?.();
+    renderer.setRenderTarget(null);
+    overlay.remove();
+  }
+  if (warm) {
+    // Nur Shader kompilieren und ein Bild rendern – unsichtbar
+    try { camera.position.set(0, 7, 8); camera.lookAt(0, 0, 0); renderer.compile(scene, camera); composer.render(); } catch { /* egal */ }
+    requestAnimationFrame(() => { teardown(); done(); });
+    return;
+  }
+
   const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera, frameParts, kingSq, sqPos, mats, attacker };
   const effect = (EFFECTS[finisher] || EFFECTS.klassisch)(ctx);
   const TOTAL = effect.total || 7.6;
@@ -430,9 +475,8 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     overlay.classList.add('out');
     setTimeout(() => {
       cancelAnimationFrame(raf);
-      scene.traverse((o) => { if (o.geometry && !Object.values(geoCache).includes(o.geometry)) o.geometry.dispose?.(); });
-      pmrem.dispose(); composer.dispose?.(); renderer.dispose(); renderer.forceContextLoss();
-      overlay.remove(); removeEventListener('resize', onResize); removeEventListener('keydown', onKey);
+      teardown();
+      removeEventListener('resize', onResize); removeEventListener('keydown', onKey);
       done();
     }, 600);
   }

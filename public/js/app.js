@@ -74,11 +74,28 @@ socket.on('connect', async () => {
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
   if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
-  if (!state.booted) { state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); }
+  if (!state.booted) { state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); warmFinisherLater(); }
   if (r.version && r.version !== VERSION) { state.updateTo = r.version; checkUpdate(); }
 });
 socket.on('disconnect', () => { if (!state.restarting) toast('Verbindung verloren – verbinde neu…', 'warn'); });
 socket.on('server:restarting', () => { state.restarting = true; toast('🔄 Ein Update wird eingespielt – gleich geht es weiter…'); });
+
+// 3D-Finisher schon im Hintergrund laden und vorbereiten, damit er sofort startet
+function warmFinisherLater() {
+  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1));
+  setTimeout(() => idle(async () => {
+    try {
+      const m = await import('./finisher.js');
+      // nur vorbereiten, wenn gerade nichts los ist (sonst später nochmal versuchen)
+      const tryWarm = () => {
+        if (isBusy() || document.hidden) return setTimeout(tryWarm, 5000);
+        const p = state.profile;
+        m.warmupFinisher({ boardTheme: p?.equipped.board, skins: { w: p?.equipped.pieces, b: p?.equipped.pieces } });
+      };
+      tryWarm();
+    } catch { /* egal – lädt dann eben beim ersten Finisher */ }
+  }, { timeout: 4000 }), 2500);
+}
 
 // ---------------------------------------------------------------- Automatisch aktualisieren
 // Nach einem Update lädt die Seite kurz neu – aber nie mitten in einer Partie, Suche, Abstimmung oder einem Finisher.
@@ -232,18 +249,30 @@ $('#admin-btn').onclick = () => {
 };
 
 // ================================================================ Profile anderer Spieler ansehen
+// Profile kurz zwischenspeichern (und schon beim Antippen laden), damit sie sofort aufgehen
+const profileCache = new Map(); // id -> { at, p: Promise }
+function fetchProfile(id) {
+  const c = profileCache.get(id);
+  if (c && Date.now() - c.at < 20_000) return c.p;
+  const p = emit('profile:get', { id });
+  profileCache.set(id, { at: Date.now(), p });
+  p.then((r) => { if (!r.profile) profileCache.delete(id); });
+  return p;
+}
 async function showPlayerProfile(id) {
   if (!id) return;
-  const r = await emit('profile:get', { id });
-  if (r.error || !r.profile) return toast(esc(r.error || 'Profil nicht gefunden.'), 'warn');
+  const ov = openOverlay('<div class="pp-loading"><span class="spinner"></span> Profil wird geladen…</div>', { wide: true, onClose: stopProfileMusic });
+  ov.el.classList.add('pp-modal');
+  const r = await fetchProfile(id);
+  if (!ov.root.isConnected) return; // schon wieder zu
+  if (r.error || !r.profile) { ov.close(); return toast(esc(r.error || 'Profil nicht gefunden.'), 'warn'); }
   const u = r.profile;
-  const ov = openOverlay(`<div class="pp-wrap">${profileCardHTML(u)}
+  ov.el.innerHTML = `<div class="pp-wrap">${profileCardHTML(u)}
     <div class="pc-sec"><h4>🕹️ Letzte Partien</h4>
     <ul class="history">${u.history.length ? u.history.map((h) => `<li>${avatar(h.oppAvatar, 30)}<div><b>${esc(h.opponent)}</b> ${h.type === 'bot' ? '<span class="tag">Bot</span>' : ''}<div class="muted" style="font-size:12px">${REASONS[h.reason] || ''} · ${timeAgo(h.at)}</div></div>
       <div class="res"><b class="res-${h.outcome}">${h.outcome === 'win' ? 'Sieg' : h.outcome === 'loss' ? 'Niederlage' : 'Remis'}</b>${h.type === 'online' && h.rating ? `<div class="muted">${h.rating > 0 ? '+' : ''}${h.rating} Elo</div>` : ''}</div></li>`).join('') : '<li class="muted">Noch keine Partien.</li>'}</ul></div>
     <p class="muted small" style="text-align:center">Mitglied seit ${new Date(u.createdAt || Date.now()).toLocaleDateString('de-DE')}</p>
-    <div class="modal-actions"><button class="btn primary" data-x>Schließen</button></div></div>`, { wide: true, onClose: stopProfileMusic });
-  ov.el.classList.add('pp-modal');
+    <div class="modal-actions"><button class="btn primary" data-x>Schließen</button></div></div>`;
   $('[data-x]', ov.el).onclick = ov.close;
   wireProfileMusic(ov.el, emit);
 }
@@ -1321,7 +1350,10 @@ async function renderLeaderboard() {
       <td>${styledWho(u, 36, u.online ? '<i class="dot" title="online"></i>' : '')}</td>
       <td><b>${u.rating}</b></td><td><span class="res-win">${u.stats.wins}</span> / <span class="res-loss">${u.losses}</span> / <span class="res-draw">${u.draws}</span></td><td>${u.botWins}</td></tr>`).join('')}
     </tbody></table>` : '<p class="muted">Noch keine Partien gespielt – sei der Erste!</p>';
-  $$('tr[data-uid]', root).forEach((tr) => tr.onclick = () => showPlayerProfile(tr.dataset.uid));
+  $$('tr[data-uid]', root).forEach((tr) => {
+    tr.onpointerenter = tr.onpointerdown = () => fetchProfile(tr.dataset.uid);
+    tr.onclick = () => showPlayerProfile(tr.dataset.uid);
+  });
 }
 
 // ================================================================ Version

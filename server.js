@@ -5,6 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
+import compression from 'compression';
 import { Chess } from 'chess.js';
 import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
 import { checkUsername, badWord } from './public/js/censor.js';
@@ -204,9 +205,45 @@ setInterval(() => {
 
 // ---------------------------------------------------------------- Server
 const app = express();
-app.use('/vendor/chess.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/chess.js/dist/esm/chess.js')));
-app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules/three/build')));
-app.use('/vendor/three-jsm', express.static(path.join(__dirname, 'node_modules/three/examples/jsm')));
+// gzip für JS/CSS (Three.js wird dadurch ~4× kleiner) – Musik ist schon komprimiert
+app.use(compression({ filter: (req, res) => !req.path.startsWith('/music/') && compression.filter(req, res) }));
+// Bibliotheken ändern sich nur mit neuen Paketversionen: lange im Browser zwischenspeichern
+const LONG = { maxAge: '7d' };
+app.use('/vendor/chess.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/chess.js/dist/esm/chess.js'), LONG));
+app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules/three/build'), LONG));
+app.use('/vendor/three-jsm', express.static(path.join(__dirname, 'node_modules/three/examples/jsm'), LONG));
+
+// Profilsongs als normale Audiodatei (mit Range-Unterstützung, wichtig für iPad/Safari).
+// Läuft getrennt vom Socket – so blockiert ein großer Song nie das Laden von Profilen.
+const musicCache = new Map(); // `${id}:${at}` -> { buf, mime }
+app.get('/music/:id', async (req, res) => {
+  const u = db.users[req.params.id];
+  if (!u?.music) return res.sendStatus(404);
+  const key = `${u.id}:${u.music.at}`;
+  let m = musicCache.get(key);
+  if (!m) {
+    const data = await musicGet(u.id).catch(() => null);
+    if (!data) return res.sendStatus(404);
+    const mime = data.slice(5, data.indexOf(';'));
+    m = { buf: Buffer.from(data.slice(data.indexOf(',') + 1), 'base64'), mime: mime === 'audio/mp3' ? 'audio/mpeg' : mime };
+    for (const k of musicCache.keys()) if (k.startsWith(u.id + ':')) musicCache.delete(k);
+    musicCache.set(key, m);
+    while (musicCache.size > 8) musicCache.delete(musicCache.keys().next().value);
+  }
+  const total = m.buf.length;
+  res.set({ 'Content-Type': m.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=604800, immutable' });
+  const r = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  if (r && (r[1] || r[2])) {
+    let start, end;
+    if (r[1]) { start = +r[1]; end = r[2] ? Math.min(+r[2], total - 1) : total - 1; }
+    else { start = Math.max(0, total - +r[2]); end = total - 1; }
+    if (start >= total || start > end) { res.set('Content-Range', `bytes */${total}`); return res.sendStatus(416); }
+    res.status(206).set({ 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 });
+    return res.end(m.buf.subarray(start, end + 1));
+  }
+  res.set('Content-Length', total);
+  res.end(m.buf);
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
@@ -817,7 +854,7 @@ io.on('connection', (socket) => {
   }));
 
   socket.on('leaderboard', (_, ack) => {
-    const list = Object.values(db.users).filter((u) => u.stats.games > 0 || u.stats.botWins > 0)
+    const list = Object.values(db.users).filter((u) => u.stats.games > 0) // nur wer schon online gespielt hat
       .sort((a, b) => b.rating - a.rating || b.stats.wins - a.stats.wins).slice(0, 50)
       .map((u) => ({ ...pub(u), online: online.has(u.id), losses: u.stats.losses, draws: u.stats.draws, botWins: u.stats.botWins }));
     ack?.({ list });

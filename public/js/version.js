@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.7.2';
+export const VERSION = '1.7.3';
 export const VERSION_DATE = '2026-11-11';
 export const CHANGELOG = [
+  ['1.7.3', 'Profile öffnen sofort, Profilsong startet schneller (Streaming) und hört beim Schließen oder Tab-Wechsel garantiert auf, Finisher starten schneller (3D vorgeladen, Seite komprimiert), Rangliste nur mit Spielern, die schon online gespielt haben'],
   ['1.7.2', 'ADMIN-Abzeichen nicht mehr in der Rangliste (nur noch im Profil)'],
   ['1.7.1', 'Rangliste und Spieler-Leisten zeigen Banner, Rahmen und Namenseffekte, glänzende Admin-Schrift, Seite lädt nach Updates automatisch neu (nie mitten im Spiel), laufende Partien überstehen Updates, Profilsong bis 3 MB'],
   ['1.7.0', 'Profil-Studio: animierte Banner (oder eigenes Bild), Avatar-Rahmen, Namenseffekte, Partikel, Akzentfarbe, Bio, Lieblings-Finisher-Vitrine, Spielzeit sichtbar, Inventar zeigen/verstecken, Profilsong mit Lautstärke-Limit'],
