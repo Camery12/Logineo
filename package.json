@@ -1,6 +1,6 @@
 {
   "name": "schach-arena",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Online-Schach mit Einladungscodes, Matchmaking, Bots, Shop und 3D-Finishern",
   "type": "module",
   "main": "server.js",

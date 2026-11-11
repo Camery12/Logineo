@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.6.1';
+export const VERSION = '1.6.2';
 export const VERSION_DATE = '2026-11-11';
 export const CHANGELOG = [
+  ['1.6.2', 'Bretter, Figuren und Pakete kosten höchstens 2.000 Münzen'],
   ['1.6.1', 'Finisher günstiger: maximal 1.000 Münzen'],
   ['1.6.0', 'Kostenloses Starter-Pack (Silber-Marmor, Silber-Chrom, Midas-Touch), 12 neue Finisher (u. a. Kugelhagel, Rakete, Supernova, UFO, Krake), 3 neue Bretter, 3 neue Figuren-Sets, Bots deutlich leichter'],
   ['1.5.1', 'Admin-Menü: Spielern per Spielercode oder Name Münzen geben'],
