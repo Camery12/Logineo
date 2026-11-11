@@ -176,10 +176,10 @@ export const PROFILE_OPTIONS = {
     ['gewitter', 'Gewitter'], ['bild', 'Eigenes Bild'],
   ],
   frame: [['keiner', 'Kein Rahmen'], ['gold', 'Gold'], ['silber', 'Silber'], ['neon', 'Neon'], ['feuer', 'Feuer'], ['eis', 'Eis'], ['regenbogen', 'Regenbogen'], ['diamant', 'Diamant']],
-  nameFx: [['keiner', 'Normal'], ['glanz', 'Glanz'], ['gold', 'Gold'], ['regenbogen', 'Regenbogen'], ['feuer', 'Feuer'], ['eis', 'Eis'], ['glitch', 'Glitch']],
+  nameFx: [['keiner', 'Normal'], ['glanz', 'Glanz'], ['gold', 'Gold'], ['regenbogen', 'Regenbogen'], ['feuer', 'Feuer'], ['eis', 'Eis'], ['glitch', 'Glitch'], ['admin', 'Admin-Glanz']], // admin: nur für Admins
   particles: [['keine', 'Keine'], ['sterne', 'Sterne'], ['funken', 'Funken'], ['schnee', 'Schnee'], ['blueten', 'Blüten'], ['blasen', 'Blasen'], ['konfetti', 'Konfetti']],
   accent: ['#7c5cff', '#22d3ee', '#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#eab308', '#ffffff', '#a3e635'],
 };
 export const DEFAULT_CUSTOM = { banner: 'standard', frame: 'keiner', nameFx: 'keiner', particles: 'keine', accent: '#7c5cff', bio: '', showInventory: true, showcase: null, bannerImg: null };
-export const MUSIC_MAX_BYTES = 1_500_000;   // ca. 1,5 MB (≈ 1–1,5 Min. MP3)
+export const MUSIC_MAX_BYTES = 3_000_000;   // 3 MB (≈ 2–3 Min. MP3)
 export const MUSIC_MAX_VOLUME = 0.35;       // Lautstärke-Limit für Profilsongs

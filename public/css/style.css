@@ -610,3 +610,30 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
   .pc-vol { width: 60px; }
   .pp-modal .modal-actions, .pp-modal > .pp-wrap > p { margin-left: 16px; margin-right: 16px; }
 }
+.update-veil { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; background: rgba(8, 10, 18, .82); backdrop-filter: blur(6px); animation: fadeIn .3s ease; }
+.update-veil > div { display: grid; justify-items: center; gap: 10px; padding: 28px 36px; border-radius: 22px; background: var(--card); box-shadow: var(--shadow); }
+.update-veil b { font-size: 20px; }
+.update-veil span { color: var(--muted); }
+/* Profil-Look in Rangliste & Spieler-Leisten */
+.mini-fr { display: inline-flex; padding: 3px; border-radius: 14px; flex: none; }
+.mini-fr .avatar { border-radius: 11px; }
+.mini-fr.fr-keiner { padding: 0; }
+.lb-who { position: relative; display: inline-flex; align-items: center; gap: 12px; padding: 6px 18px 6px 6px; border-radius: 16px; overflow: hidden; min-width: min(280px, 100%); font-weight: 700; isolation: isolate; }
+.lb-who::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, rgba(10, 12, 20, .25), rgba(10, 12, 20, .55) 70%, rgba(10, 12, 20, .75)); }
+.lb-who.bn-standard { background: linear-gradient(110deg, color-mix(in srgb, var(--acc) 45%, transparent), transparent 85%); }
+.lb-who::before { z-index: -1; }
+.lb-who > * { position: relative; }
+.lb-who .pc-particles { position: absolute; }
+.lb-name { font-size: 15px; text-shadow: 0 1px 6px rgba(0, 0, 0, .6); }
+.lb-name[class*="nf-"]:not(.nf-keiner):not(.nf-feuer):not(.nf-eis):not(.nf-glitch) { text-shadow: none; }
+.lb-who .dot { margin-left: 2px; }
+.lb .lb-who.bn-sunset::before { width: 50px; height: 50px; margin-left: -25px; bottom: -30px; }
+.player-bar .pname .nf-gold, .player-bar .pname .nf-glanz, .player-bar .pname .nf-regenbogen { font-weight: 800; }
+@media (max-width: 560px) { .lb-who { min-width: 0; gap: 8px; padding-right: 10px; } }
+.lb td:nth-child(4) { white-space: nowrap; }
+@media (max-width: 560px) { .lb th:nth-child(5), .lb td:nth-child(5) { display: none; } .lb td, .lb th { padding: 10px 6px; } .lb .lb-who { padding: 4px 8px 4px 4px; } .lb .lb-name { font-size: 13px; } }
+/* Admin-Glanz (nur für Admins) */
+.nf-admin { background: linear-gradient(100deg, #9b5cff 0%, #c58bff 22%, #ffffff 30%, #c58bff 38%, #8f7bff 55%, #6aa8ff 75%, #b46bff 100%); background-size: 260% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 800; animation: adminShine 3.2s linear infinite; filter: drop-shadow(0 0 6px rgba(168, 85, 247, .75)) drop-shadow(0 0 16px rgba(120, 90, 255, .45)); }
+@keyframes adminShine { from { background-position: 130% 0; } to { background-position: -130% 0; } }
+.admin-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 900; letter-spacing: .08em; color: #fff; background: linear-gradient(100deg, #7c3aed, #a855f7 40%, #e9d5ff 50%, #a855f7 60%, #6366f1); background-size: 260% 100%; animation: adminShine 3.2s linear infinite; box-shadow: 0 0 12px rgba(168, 85, 247, .6); text-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
+.lb-who .admin-tag, .player-bar .admin-tag { margin-left: 6px; }

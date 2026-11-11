@@ -49,7 +49,7 @@ export function profileCardHTML(u, { own = false } = {}) {
       <div class="pc-av fr-${c.frame}">${avatarHTML(u.avatar, 104)}</div>
       <div class="pc-id">
         <h2 class="pc-name nf-${c.nameFx}" data-text="${esc(u.name)}">${esc(u.name)}</h2>
-        <div class="pc-tags">${u.registered ? '<span class="tag">Konto</span>' : '<span class="tag">Gast</span>'}${u.online ? '<span class="tag on"><i class="dot"></i> online</span>' : ''}<span class="tag">⏱️ ${fmtPlaytime(u.playMs)} gespielt</span></div>
+        <div class="pc-tags">${u.style?.admin ? '<span class="admin-tag">🛡️ ADMIN</span>' : ''}${u.registered ? '<span class="tag">Konto</span>' : '<span class="tag">Gast</span>'}${u.online ? '<span class="tag on"><i class="dot"></i> online</span>' : ''}<span class="tag">⏱️ ${fmtPlaytime(u.playMs)} gespielt</span></div>
         ${c.bio ? `<p class="pc-bio">„${esc(c.bio)}“</p>` : ''}
       </div>
       <div class="pc-elo"><b>${u.rating ?? 0}</b><span>Elo</span></div>

@@ -8,19 +8,23 @@ import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
 import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
 import { checkUsername, badWord } from './public/js/censor.js';
+import { VERSION } from './public/js/version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'db.json');
 const VOTE_MS = 12000;
 const RECONNECT_MS = 45000;
+const RESTORE_MS = 90_000;      // nach einem Update: so lange haben beide Zeit, zurückzukommen
+const BOOT = Date.now();
+const handoffWindow = () => Date.now() - BOOT < 20 * 60_000;
 
 // ---------------------------------------------------------------- Datenbank
 // Mit MONGODB_URI (z. B. kostenloses MongoDB Atlas) bleiben alle Profile bei Updates erhalten.
 // Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
 const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-let mongoUsers = null, mongoMusic = null;
+let mongoUsers = null, mongoMusic = null, mongoMeta = null;
 const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
 
 async function loadDb() {
@@ -30,6 +34,7 @@ async function loadDb() {
     await client.connect();
     mongoUsers = client.db(process.env.MONGODB_DB || 'schacharena').collection('users');
     mongoMusic = client.db(process.env.MONGODB_DB || 'schacharena').collection('music');
+    mongoMeta = client.db(process.env.MONGODB_DB || 'schacharena').collection('meta');
     await mongoMusic.createIndex({ id: 1 }, { unique: true });
     await mongoUsers.createIndex({ id: 1 }, { unique: true });
     for (const doc of await mongoUsers.find({}).toArray()) {
@@ -85,6 +90,8 @@ async function flush() {
 // Render beendet den alten Server bei jedem Update mit SIGTERM: vorher alles speichern
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
+    try { io.emit('server:restarting'); } catch { /* egal */ }
+    try { await saveHandoff(); } catch (e) { console.error('Partien konnten nicht übergeben werden:', e.message); }
     try { await flush(); } catch { /* egal */ }
     process.exit(0);
   });
@@ -151,7 +158,8 @@ function migrateUsers() {
   save();
 }
 
-const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins }, style: { frame: customOf(u).frame, nameFx: customOf(u).nameFx } });
+const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins }, style: styleOf(u) });
+const styleOf = (u) => { const c = customOf(u); return { frame: c.frame, nameFx: c.nameFx, banner: c.banner === 'bild' ? 'standard' : c.banner, accent: c.accent, admin: isAdmin(u) }; };
 // Admins: per Spielercode (fest, nicht änderbar). Weitere über ADMIN_CODES="code1,code2" bei Render.
 const ADMIN_CODES = new Set(String(process.env.ADMIN_CODES || '58525408').split(',').map((s) => s.trim()).filter(Boolean));
 const isAdmin = (u) => !!u && ADMIN_CODES.has(u.code);
@@ -161,6 +169,7 @@ function customOf(u) {
   const c = { ...DEFAULT_CUSTOM, ...(u.custom || {}) };
   for (const k of ['banner', 'frame', 'nameFx', 'particles', 'accent']) if (!allowed(k).includes(c[k])) c[k] = DEFAULT_CUSTOM[k];
   if (c.showcase && !u.owned.finisher.includes(c.showcase)) c.showcase = null;
+  if (c.nameFx === 'admin' && !isAdmin(u)) c.nameFx = 'keiner';
   return c;
 }
 const musicMeta = (u) => (u.music ? { title: u.music.title, volume: u.music.volume, at: u.music.at } : null);
@@ -202,7 +211,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 3_000_000 }); // genug für Profilsongs
+const io = new Server(server, { maxHttpBufferSize: 5_000_000 }); // genug für Profilsongs
 
 const online = new Map();      // userId -> socket
 const games = new Map();       // gameId -> game
@@ -222,8 +231,8 @@ setInterval(broadcastStats, 5000);
 // ---------------------------------------------------------------- Spiele
 function clockState(g) {
   const c = { w: g.clock.w, b: g.clock.b };
-  if (g.status === 'playing' && g.timeMs && g.started) c[g.chess.turn()] -= Date.now() - g.lastTick;
-  return { w: Math.max(0, c.w), b: Math.max(0, c.b), running: g.status === 'playing' && g.started ? g.chess.turn() : null, unlimited: !g.timeMs };
+  if (g.status === 'playing' && g.timeMs && g.started && !g.paused) c[g.chess.turn()] -= Date.now() - g.lastTick;
+  return { w: Math.max(0, c.w), b: Math.max(0, c.b), running: g.status === 'playing' && g.started && !g.paused ? g.chess.turn() : null, unlimited: !g.timeMs, paused: !!g.paused };
 }
 
 function gamePayload(g, uid) {
@@ -296,7 +305,7 @@ function elo(ra, rb, score) {
 
 function endGame(g, result, reason) {
   if (g.status === 'over') return;
-  if (g.status === 'playing' && g.timeMs && g.started) { g.clock[g.chess.turn()] -= Date.now() - g.lastTick; }
+  if (g.status === 'playing' && g.timeMs && g.started && !g.paused) { g.clock[g.chess.turn()] -= Date.now() - g.lastTick; }
   g.status = 'over';
   clearTimeout(g.voteTimer);
   for (const t of Object.values(g.disconnect)) clearTimeout(t);
@@ -349,7 +358,7 @@ function checkGameEnd(g) {
 setInterval(() => {
   const now = Date.now();
   for (const g of games.values()) {
-    if (g.status !== 'playing' || !g.timeMs || !g.started) continue;
+    if (g.status !== 'playing' || !g.timeMs || !g.started || g.paused) continue;
     const t = g.chess.turn();
     if (g.clock[t] - (now - g.lastTick) <= 0) {
       g.clock[t] = 0; g.lastTick = now;
@@ -357,6 +366,111 @@ setInterval(() => {
     }
   }
 }, 200);
+
+// ---------------------------------------------------------------- Updates ohne Spielabbruch
+// Render startet bei einem Update erst den neuen Server und beendet dann den alten (SIGTERM).
+// Der alte Server speichert laufende Partien, der neue übernimmt sie, sobald die Spieler neu verbinden.
+async function saveHandoff() {
+  const now = Date.now();
+  const list = [...games.values()].filter((g) => g.status === 'playing' || g.status === 'vote').map((g) => {
+    const clock = { ...g.clock };
+    if (g.status === 'playing' && g.timeMs && g.started && !g.paused) clock[g.chess.turn()] -= now - g.lastTick;
+    const board = g.board || pick(Object.values(g.votes).length ? Object.values(g.votes) : g.voteOptions.map((o) => o.board));
+    return { id: g.id, source: g.source, players: g.players, moves: g.chess.history(), timeMs: g.timeMs, clock, started: g.started, board, boardDecision: g.boardDecision || 'zufall', drawOffer: g.drawOffer };
+  });
+  const doc = { id: 'handoff', at: now, version: VERSION, games: list };
+  if (mongoMeta) await mongoMeta.replaceOne({ id: 'handoff' }, doc, { upsert: true });
+  else db.handoff = doc;
+  if (list.length) console.log(`♻️ ${list.length} laufende Partie(n) für den neuen Server gespeichert`);
+}
+
+const restoredIds = new Set();
+let handoffJob = null;
+function restoreHandoff() {
+  if (!handoffWindow()) return Promise.resolve();
+  handoffJob ||= (async () => {
+    try {
+      const h = mongoMeta ? await mongoMeta.findOne({ id: 'handoff' }) : db.handoff;
+      if (!h?.games?.length || Date.now() - h.at > 10 * 60_000) return;
+      let n = 0;
+      for (const s of h.games) {
+        if (restoredIds.has(s.id) || games.has(s.id)) continue;
+        restoredIds.add(s.id);
+        const { w, b } = s.players;
+        if (!db.users[w] || !db.users[b] || userGame.has(w) || userGame.has(b)) continue;
+        const chess = new Chess();
+        try { for (const m of s.moves) chess.move(m); } catch { continue; }
+        const g = {
+          id: s.id, source: s.source, players: s.players, chess, timeMs: s.timeMs,
+          clock: { w: Math.max(1000, s.clock.w), b: Math.max(1000, s.clock.b) }, lastTick: Date.now(), started: s.started,
+          status: 'playing', votes: {}, board: s.board, boardDecision: s.boardDecision, drawOffer: s.drawOffer,
+          disconnect: {}, paused: true, restored: true, waitUntil: Date.now() + RESTORE_MS,
+        };
+        games.set(g.id, g); userGame.set(w, g.id); userGame.set(b, g.id);
+        for (const uid of [w, b]) if (!online.has(uid)) g.disconnect[uid] = setTimeout(() => absentAfterUpdate(g, uid), RESTORE_MS);
+        n++;
+      }
+      if (n) console.log(`♻️ ${n} laufende Partie(n) nach dem Update übernommen`);
+      if (mongoMeta) await mongoMeta.deleteOne({ id: 'handoff', at: h.at });
+      else if (db.handoff?.at === h.at) { delete db.handoff; save(); }
+    } catch (e) { console.error('Partien konnten nicht übernommen werden:', e.message); }
+    finally { setTimeout(() => { handoffJob = null; }, 2000); }
+  })();
+  return handoffJob;
+}
+
+// Kommt nach einem Update nur einer zurück, verliert der andere wie beim Verlassen. Kommt keiner zurück: ohne Wertung beenden.
+function absentAfterUpdate(g, uid) {
+  delete g.disconnect[uid];
+  if (g.status !== 'playing') return;
+  const opp = opponentOf(g, uid);
+  if (!online.has(opp)) {
+    g.status = 'over';
+    for (const t of Object.values(g.disconnect)) clearTimeout(t);
+    userGame.delete(g.players.w); userGame.delete(g.players.b); games.delete(g.id);
+    emitTo(opp, 'game:cancelled', {});
+    return;
+  }
+  endGame(g, g.players.w === uid ? 'b' : 'w', 'abandon');
+}
+
+function resumeIfReady(g) {
+  if (!g.paused || !online.has(g.players.w) || !online.has(g.players.b)) return;
+  g.paused = false; g.lastTick = Date.now();
+  sendState(g, { resumedAfterUpdate: true });
+}
+
+// Ein Spieler, der gerade noch auf dem alten Server war, hat dort evtl. neuere Daten (Münzen, Elo …)
+const refreshedUsers = new Set();
+async function refreshFromDb(u) {
+  if (!mongoUsers || !handoffWindow() || refreshedUsers.has(u.id)) return;
+  refreshedUsers.add(u.id);
+  if (lastSaved.get(u.id) !== JSON.stringify(u)) return; // hier schon geändert – nicht überschreiben
+  const doc = await mongoUsers.findOne({ id: u.id });
+  if (!doc) return;
+  const { _id, ...fresh } = doc;
+  const json = JSON.stringify(fresh);
+  if (json === lastSaved.get(u.id)) return;
+  if (byName.get(nameKey(u.name)) === u) byName.delete(nameKey(u.name));
+  for (const k of Object.keys(u)) delete u[k];
+  Object.assign(u, fresh);
+  byName.set(nameKey(u.name), u);
+  lastSaved.set(u.id, json);
+}
+// Token unbekannt? Vielleicht wurde das Konto gerade erst auf dem alten Server angelegt.
+async function userByToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  let u = byToken.get(token);
+  if (u || !mongoUsers) return u || null;
+  const doc = await mongoUsers.findOne({ token });
+  if (!doc) return null;
+  const { _id, ...fresh } = doc;
+  if (db.users[fresh.id]) return db.users[fresh.id];
+  db.users[fresh.id] = fresh; lastSaved.set(fresh.id, JSON.stringify(fresh));
+  byToken.set(fresh.token, fresh); byCode.set(fresh.code, fresh); byName.set(nameKey(fresh.name), fresh);
+  refreshedUsers.add(fresh.id);
+  return fresh;
+}
 
 // ---------------------------------------------------------------- Sockets
 const clean = (s, n) => String(s ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, n);
@@ -366,18 +480,26 @@ io.on('connection', (socket) => {
   let user = null;
   const need = (fn) => (...args) => { if (user) try { fn(...args); } catch (e) { console.error(e); } };
 
-  socket.on('auth', ({ token } = {}, ack) => {
-    user = byToken.get(token) || createUser();
+  socket.on('auth', async ({ token } = {}, ack) => {
+    let u = null;
+    try { u = await userByToken(token); if (u) await refreshFromDb(u); await restoreHandoff(); } catch (e) { console.error('auth:', e.message); }
+    if (!socket.connected) return;
+    user = u || createUser();
     const old = online.get(user.id);
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
-    ack?.({ token: user.token, profile: priv(user) });
+    ack?.({ token: user.token, profile: priv(user), version: VERSION });
     // Laufendes Spiel fortsetzen
     const gid = userGame.get(user.id);
     const g = gid && games.get(gid);
     if (g) {
       if (g.disconnect[user.id]) { clearTimeout(g.disconnect[user.id]); delete g.disconnect[user.id]; emitTo(opponentOf(g, user.id), 'game:opponent', { online: true }); }
-      if (g.status === 'playing') socket.emit('game:start', { ...gamePayload(g, user.id), resumed: true });
+      if (g.status === 'playing') {
+        socket.emit('game:start', { ...gamePayload(g, user.id), resumed: true });
+        const opp = opponentOf(g, user.id);
+        if (g.paused && !online.has(opp)) socket.emit('game:opponent', { online: false, deadline: g.waitUntil, update: true });
+        resumeIfReady(g);
+      }
       else if (g.status === 'vote') socket.emit('match:vote', { gameId: g.id, options: g.voteOptions, deadline: g.voteDeadline, duration: VOTE_MS, players: { w: pub(db.users[g.players.w]), b: pub(db.users[g.players.b]) }, you: g.players.w === user.id ? 'w' : 'b', votes: g.votes });
     }
     broadcastStats();
@@ -510,6 +632,7 @@ io.on('connection', (socket) => {
   socket.on('profile:custom', need(({ custom } = {}, ack) => {
     const c = { ...customOf(user) };
     const inp = custom || {};
+    if (inp.nameFx === 'admin' && !isAdmin(user)) return ack?.({ error: 'Diese Schrift gibt es nur für Admins.' });
     for (const k of ['banner', 'frame', 'nameFx', 'particles', 'accent']) if (inp[k] !== undefined) { if (!allowed(k).includes(inp[k])) return ack?.({ error: 'Ungültige Auswahl.' }); c[k] = inp[k]; }
     if (inp.bio !== undefined) {
       const bio = clean(inp.bio, 80);
@@ -534,7 +657,7 @@ io.on('connection', (socket) => {
       if (data !== undefined) {
         const ok = typeof data === 'string' && /^data:audio\/(mpeg|mp3|ogg|wav|x-wav|mp4|x-m4a|aac|webm);base64,/.test(data);
         if (!ok) return ack?.({ error: 'Bitte eine Audiodatei (MP3, OGG, M4A, WAV) hochladen.' });
-        if (data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal ca. 1,5 MB).' });
+        if (data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal 3 MB).' });
         await musicSet(user.id, data);
         user.music = { title: user.music?.title || 'Profilsong', volume: user.music?.volume ?? 0.6, at: Date.now() };
       }
@@ -637,6 +760,7 @@ io.on('connection', (socket) => {
     const g = myGame();
     if (!g) return ack?.({ error: 'Kein aktives Spiel.' });
     const color = g.players.w === user.id ? 'w' : 'b';
+    if (g.paused) return ack?.({ error: 'Warte kurz, bis dein Gegner nach dem Update wieder da ist.', fen: g.chess.fen() });
     if (g.chess.turn() !== color) return ack?.({ error: 'Du bist nicht am Zug.', fen: g.chess.fen() });
     let m;
     try { m = g.chess.move({ from, to, promotion: promotion || 'q' }); } catch { m = null; }

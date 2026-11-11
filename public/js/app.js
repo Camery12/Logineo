@@ -28,6 +28,11 @@ const timeAgo = (t) => {
   if (d < 86400) return `vor ${Math.floor(d / 3600)} Std.`;
   return `vor ${Math.floor(d / 86400)} Tg.`;
 };
+// Spieler mit seinem Profil-Look (Mini-Banner, Rahmen, Namenseffekt) – z. B. in der Rangliste
+const styledWho = (u, size, extra = '') => {
+  const st = u.style || {};
+  return `<div class="lb-who bn-${st.banner || 'standard'}" style="--acc:${st.accent || '#7c5cff'}"><span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(u.avatar, size)}</span><span class="lb-name nf-${st.nameFx || 'keiner'}" data-text="${esc(u.name)}">${esc(u.name)}</span>${st.admin ? '<span class="admin-tag">ADMIN</span>' : ''}${extra}</div>`;
+};
 const avatar = (a, size = 40) => {
   if (!a) return `<span class="avatar" style="--s:${size}px"></span>`;
   if (a.type === 'image') return `<span class="avatar" style="--s:${size}px;background-image:url('${a.value}')"></span>`;
@@ -65,11 +70,36 @@ const emit = (ev, data) => new Promise((res) => socket.emit(ev, data, (r) => res
 
 socket.on('connect', async () => {
   const r = await emit('auth', { token: localStorage.getItem('token') });
+  if (!r.token) return;
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
+  if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
   if (!state.booted) { state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); }
+  if (r.version && r.version !== VERSION) { state.updateTo = r.version; checkUpdate(); }
 });
-socket.on('disconnect', () => toast('Verbindung verloren – verbinde neu…', 'warn'));
+socket.on('disconnect', () => { if (!state.restarting) toast('Verbindung verloren – verbinde neu…', 'warn'); });
+socket.on('server:restarting', () => { state.restarting = true; toast('🔄 Ein Update wird eingespielt – gleich geht es weiter…'); });
+
+// ---------------------------------------------------------------- Automatisch aktualisieren
+// Nach einem Update lädt die Seite kurz neu – aber nie mitten in einer Partie, Suche, Abstimmung oder einem Finisher.
+const isBusy = () => !!(state.view === 'game' || state.game?.active || (state.bot && !state.bot.over) || state.searching || state.room
+  || $('.overlay') || $('.finisher') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName));
+function checkUpdate() {
+  const v = state.updateTo;
+  if (!v) return;
+  if (sessionStorage.getItem('reloadedFor') === v) return; // schon versucht – keine Endlosschleife
+  if (isBusy()) {
+    if (!state.updateNotified) { state.updateNotified = true; toast(`✨ Update v${esc(v)} ist da – die Seite lädt nach deinem Spiel kurz neu.`); }
+    clearTimeout(state.updateTimer); state.updateTimer = setTimeout(checkUpdate, 2000);
+    return;
+  }
+  sessionStorage.setItem('reloadedFor', v);
+  const el = document.createElement('div');
+  el.className = 'update-veil';
+  el.innerHTML = `<div><div class="spinner"></div><b>Update auf v${esc(v)}</b><span>Die Seite lädt kurz neu…</span></div>`;
+  document.body.appendChild(el);
+  setTimeout(() => location.reload(), 1200);
+}
 socket.on('session:replaced', () => { toast('Du hast SchachArena in einem anderen Tab geöffnet.', 'warn'); });
 socket.on('stats', (s) => { state.stats = s; $('#online-count').textContent = `${s.online} online`; const el = $('#hero-online'); if (el) el.textContent = s.online; const pl = $('#hero-playing'); if (pl) pl.textContent = s.playing; });
 socket.on('toast', (t) => toast(esc(t.text), t.type));
@@ -557,8 +587,10 @@ function renderBar(el, player, color, { clock = null, thinking = false, tag = ''
   el.classList.add('clickable');
   el.title = 'Profil ansehen';
   el.onclick = (e) => { if (e.target.closest('.clock')) return; player.bot ? showBotProfile(player.bot) : showPlayerProfile(player.id); };
-  el.innerHTML = `${avatar(player.avatar, 44)}
-    <div><div class="pname">${esc(player.name)} ${tag ? `<span class="tag">${tag}</span>` : ''} <span class="prating">${player.rating ?? ''} Elo</span></div>
+  const st = player.style || {};
+  el.style.setProperty('--acc', st.accent || '#7c5cff');
+  el.innerHTML = `<span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(player.avatar, 44)}</span>
+    <div><div class="pname"><span class="nf-${st.nameFx || 'keiner'}" data-text="${esc(player.name)}">${esc(player.name)}</span>${st.admin ? '<span class="admin-tag">ADMIN</span>' : ''} ${tag ? `<span class="tag">${tag}</span>` : ''} <span class="prating">${player.rating ?? ''} Elo</span></div>
     <div class="caps">${cap.taken(color).map(([t, c]) => `<i style="background-image:${pieceURL(t, c, skinFor(c)).replace(/"/g, '&quot;')}"></i>`).join('')}${diff > 0 ? `<b>+${diff}</b>` : ''}</div></div>
     ${thinking ? '<div class="thinking"><span class="spinner"></span>denkt nach…</div>' : ''}
     ${clock !== null ? `<div class="clock" data-c="${color}">${clock}</div>` : ''}`;
@@ -745,6 +777,7 @@ socket.on('game:state', (s) => {
   renderOnline();
   if (s.drawOffer && s.drawOffer !== g.you && prevOffer !== s.drawOffer) showDrawOffer();
   if (!s.drawOffer) setBanner('');
+  if (s.resumedAfterUpdate) { clearInterval(state.oppTimer); toast('▶️ Weiter geht\'s – beide sind wieder da!', 'good'); }
   if (s.drawDeclined && g.drawOffer == null && prevOffer === g.you) toast('Remisangebot abgelehnt', 'warn');
 });
 
@@ -756,18 +789,27 @@ function showDrawOffer() {
   $('#dd').onclick = () => { socket.emit('game:draw', { action: 'decline' }); setBanner(''); };
 }
 
-socket.on('game:opponent', ({ online, deadline }) => {
+socket.on('game:opponent', ({ online, deadline, update }) => {
   if (!state.game?.active) return;
   clearInterval(state.oppTimer);
   if (online) { setBanner(''); toast('Gegner ist wieder da', 'good'); return; }
   const upd = () => {
     const s = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    setBanner(`<div>📡 Dein Gegner hat die Verbindung verloren. Sieg in <b>${s}s</b>, falls er nicht zurückkommt.</div>`);
+    if (s <= 0) clearInterval(state.oppTimer);
+    setBanner(update
+      ? `<div>⏸️ Kurze Pause wegen Update – warte auf deinen Gegner (<b>${s}s</b>). Die Uhr steht still.</div>`
+      : `<div>📡 Dein Gegner hat die Verbindung verloren. Sieg in <b>${s}s</b>, falls er nicht zurückkommt.</div>`);
   };
   upd(); state.oppTimer = setInterval(upd, 1000);
 });
 
 socket.on('game:emote', ({ emote }) => showEmote(emote));
+socket.on('game:cancelled', () => {
+  if (!state.game) return;
+  clearInterval(state.oppTimer); setBanner('');
+  state.game.active = false; renderOnline();
+  toast('Die Partie wurde nach dem Update ohne Wertung beendet, weil dein Gegner nicht zurückkam.', 'warn');
+});
 function showEmote(e) {
   const el = $('#emote-pop');
   el.textContent = e; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
@@ -1180,7 +1222,7 @@ function renderProfile() {
 // ================================================================ Profil-Studio
 function renderStudio(root, p) {
   const c = p.custom || {};
-  const opt = (k, labelFn) => PROFILE_OPTIONS[k].map(([id, label]) => `<button class="st-opt ${c[k] === id ? 'on' : ''}" data-k="${k}" data-v="${id}" title="${esc(label)}">${labelFn(id, label)}</button>`).join('');
+  const opt = (k, labelFn) => PROFILE_OPTIONS[k].filter(([id]) => id !== 'admin' || p.admin).map(([id, label]) => `<button class="st-opt ${c[k] === id ? 'on' : ''}" data-k="${k}" data-v="${id}" title="${esc(label)}">${labelFn(id, label)}</button>`).join('');
   const box = html(`<section class="card studio">
     <div class="card-head"><h3>🎬 Profil-Studio</h3><span class="muted small">So sehen andere dein Profil – alles kostenlos</span></div>
     <div class="studio-grid">
@@ -1198,7 +1240,7 @@ function renderStudio(root, p) {
         <h4>Inventar</h4>
         <label class="st-toggle"><input type="checkbox" id="st-inv" ${c.showInventory !== false ? 'checked' : ''}><span></span> Inventar für andere sichtbar</label>
         <h4>🎵 Profilsong</h4>
-        <p class="muted small">Spielt leise ab, wenn jemand dein Profil öffnet (Lautstärke begrenzt, Besucher können stummschalten). MP3/OGG/M4A, max. ca. 1,5 MB. Lade nur Musik hoch, die du verwenden darfst.</p>
+        <p class="muted small">Spielt leise ab, wenn jemand dein Profil öffnet (Lautstärke begrenzt, Besucher können stummschalten). MP3/OGG/M4A, max. 3 MB. Lade nur Musik hoch, die du verwenden darfst.</p>
         ${p.music ? `<div class="st-song"><b>🎶 ${esc(p.music.title)}</b>
             <form id="st-mtitle" class="adm-row"><input name="t" maxlength="40" value="${esc(p.music.title)}" placeholder="Songtitel"><button class="btn sm">Titel speichern</button></form>
             <label class="st-vol">Lautstärke <input type="range" id="st-mvol" min="0" max="100" value="${Math.round((p.music.volume ?? 0.6) * 100)}"></label>
@@ -1224,7 +1266,7 @@ function renderStudio(root, p) {
   const mfile = $('#st-music', box);
   if (mfile) mfile.onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
-    if (f.size > MUSIC_MAX_BYTES) return toast(`Der Song ist zu groß (${(f.size / 1e6).toFixed(1)} MB). Maximal ca. 1,5 MB – kürze ihn oder nimm eine niedrigere Qualität.`, 'warn');
+    if (f.size > MUSIC_MAX_BYTES) return toast(`Der Song ist zu groß (${(f.size / 1e6).toFixed(1)} MB). Maximal 3 MB – kürze ihn oder nimm eine niedrigere Qualität.`, 'warn');
     toast('⏳ Song wird hochgeladen…');
     const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(f); });
     const title = f.name.replace(/\.[^.]+$/, '').slice(0, 40);
@@ -1276,7 +1318,7 @@ async function renderLeaderboard() {
   const me = state.profile.id;
   $('.card', root).innerHTML = list.length ? `<table class="lb"><thead><tr><th>#</th><th>Spieler</th><th>Elo</th><th>S / N / R</th><th>Bot-Siege</th></tr></thead><tbody>
     ${list.map((u, i) => `<tr class="clickable ${u.id === me ? 'me' : ''}" data-uid="${esc(u.id)}" title="Profil ansehen"><td><span class="rank ${i < 3 ? 'r' + (i + 1) : ''}">${i + 1}</span></td>
-      <td><div class="who">${avatar(u.avatar, 36)}${esc(u.name)} ${u.online ? '<i class="dot" title="online"></i>' : ''}</div></td>
+      <td>${styledWho(u, 36, u.online ? '<i class="dot" title="online"></i>' : '')}</td>
       <td><b>${u.rating}</b></td><td><span class="res-win">${u.stats.wins}</span> / <span class="res-loss">${u.losses}</span> / <span class="res-draw">${u.draws}</span></td><td>${u.botWins}</td></tr>`).join('')}
     </tbody></table>` : '<p class="muted">Noch keine Partien gespielt – sei der Erste!</p>';
   $$('tr[data-uid]', root).forEach((tr) => tr.onclick = () => showPlayerProfile(tr.dataset.uid));
