@@ -58,7 +58,7 @@ const REASONS = {
 const DECISIONS = { gleich: 'Beide hatten dasselbe Brett', einig: 'Ihr wart euch einig', zufall: 'Per Zufall entschieden', 'einzige Stimme': 'Nur eine Stimme abgegeben' };
 
 // ================================================================ Zustand & Verbindung
-const state = { profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'board', botColor: 'random', roomTime: 600000 };
+const state = { profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'bundle', botColor: 'random', roomTime: 600000 };
 const socket = window.io ? window.io({ transports: ['websocket', 'polling'] }) : createSocket();
 const emit = (ev, data) => new Promise((res) => socket.emit(ev, data, (r) => res(r || {})));
 
@@ -789,7 +789,7 @@ socket.on('game:over', async (d) => {
   if (d.finisher) {
     await mateFx();
     const { playFinisher } = await import('./finisher.js');
-    await playFinisher({ finisher: d.finisher, fen: d.fen, boardTheme: d.board, skins: d.skins, loserColor, winnerName: d.winnerName });
+    await playFinisher({ finisher: d.finisher, fen: d.fen, boardTheme: d.board, skins: d.skins, loserColor, winnerName: d.winnerName, attackerSq: board.lastMove?.to });
   }
   if (d.reason === 'resign') await throwBoard();
   setProfile(d.profile, { coinsAnim: true });
@@ -985,7 +985,7 @@ async function finishBot(resigned) {
     const p = state.profile;
     await playFinisher({
       finisher: outcome === 'win' ? p.equipped.finisher : s.bot.finisher, fen: c.fen(), boardTheme: p.equipped.board,
-      skins: { w: p.equipped.pieces, b: p.equipped.pieces }, loserColor: c.turn(), winnerName: outcome === 'win' ? p.name : s.bot.name,
+      skins: { w: p.equipped.pieces, b: p.equipped.pieces }, loserColor: c.turn(), winnerName: outcome === 'win' ? p.name : s.bot.name, attackerSq: c.history({ verbose: true }).at(-1)?.to,
     });
   }
   if (reason === 'resign') await throwBoard();
@@ -1013,12 +1013,12 @@ function renderShop() {
       const [[, bId], [, pId], [, fId]] = bd.items;
       const names = bd.items.map(([k, id]) => findItem(k, id)).map((it) => `<li>${esc(it.name)} <span class="muted">${fmtNum(it.price)}</span></li>`).join('');
       const card = html(`<div class="card shop-item bundle ${!missing.length ? 'equipped' : ''}">
-        <span class="ribbon">-${Math.round(bd.discount * 100)} %</span>
+        <span class="ribbon">${bd.discount >= 1 ? 'GRATIS' : `-${Math.round(bd.discount * 100)} %`}</span>
         <div class="prev bundle-prev"><div class="bp-board"></div><div class="bp-fin">${findItem('finisher', fId).icon}</div></div>
         <h4>${bd.icon} ${esc(bd.name)}</h4><p>${esc(bd.desc)}</p><ul class="bundle-list">${names}</ul>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-          ${missing.length ? `<span><s class="muted small">${fmtNum(full)}</s> ${coinHTML(price)}</span>` : '<span class="muted small">✔ Alles freigeschaltet</span>'}
-          ${missing.length ? `<button class="btn sm gold" data-bundle ${p.coins < price ? 'disabled' : ''}>Paket kaufen</button>` : ''}
+          ${missing.length ? `<span><s class="muted small">${fmtNum(full)}</s> ${price === 0 ? '<b style="color:var(--good)">Kostenlos</b>' : coinHTML(price)}</span>` : '<span class="muted small">✔ Alles freigeschaltet</span>'}
+          ${missing.length ? `<button class="btn sm ${price === 0 ? 'good' : 'gold'}" data-bundle ${p.coins < price ? 'disabled' : ''}>${price === 0 ? '🎁 Gratis holen' : 'Paket kaufen'}</button>` : ''}
         </div></div>`);
       $('.bp-board', card).appendChild(miniBoard(bId, { w: pId, b: pId }));
       const btn = $('[data-bundle]', card);
@@ -1053,7 +1053,7 @@ function renderShop() {
     if (tab === 'board') prev.appendChild(miniBoard(it.id, { w: p.equipped.pieces, b: p.equipped.pieces }));
     if (tab === 'pieces') prev.appendChild(miniBoard(p.equipped.board, { w: it.id, b: it.id }, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'));
     if (tab === 'finisher') {
-      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff' };
+      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff', midas: '#ffc53d', ak: '#ff8a3a', feuersturm: '#ff4a1a', rakete: '#ff9a3a', ufo: '#7fff9a', supernova: '#cfe8ff', portal: '#9a7cff', krake: '#b46cff', bowling: '#5a3cff', schwerkraft: '#8ab4ff', shuriken: '#d7dde4', lawine: '#e8f4ff' };
       prev.style.padding = '0';
       prev.innerHTML = `<div class="fin-prev" style="--fc:${colors[it.id]}"><span>${it.icon}</span><button class="btn sm">▶ Vorschau</button></div>`;
       $('button', prev).onclick = () => previewFinisher(it.id);
@@ -1084,7 +1084,7 @@ function confirmBuy(kind, it) {
 async function previewFinisher(id) {
   const p = state.profile;
   const { playFinisher } = await import('./finisher.js');
-  await playFinisher({ finisher: id, fen: 'r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4', boardTheme: p.equipped.board, skins: { w: p.equipped.pieces, b: p.equipped.pieces }, loserColor: 'b', winnerName: p.name, subtitle: 'Vorschau' });
+  await playFinisher({ finisher: id, fen: 'r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4', boardTheme: p.equipped.board, skins: { w: p.equipped.pieces, b: p.equipped.pieces }, loserColor: 'b', winnerName: p.name, subtitle: 'Vorschau', attackerSq: 'f7' });
 }
 
 // ================================================================ Profil

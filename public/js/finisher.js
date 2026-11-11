@@ -228,7 +228,7 @@ export function playFinisher(opts) {
   });
 }
 
-function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { w: 'klassisch', b: 'klassisch' }, loserColor = 'b', winnerName = '', subtitle }, done) {
+function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { w: 'klassisch', b: 'klassisch' }, loserColor = 'b', winnerName = '', subtitle, attackerSq = null }, done) {
   const info = FINISHERS.find((f) => f.id === finisher) || FINISHERS[0];
   const overlay = document.createElement('div');
   overlay.className = 'finisher';
@@ -268,7 +268,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.8, 0.4, 2.2);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.75, 0.4, 2.8);
   if (window.__noBloom) bloom.enabled = false;
   composer.addPass(bloom);
   const fxPass = new ShaderPass(FXShader);
@@ -277,7 +277,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
 
   // Licht
   const hemi = new THREE.HemisphereLight('#cfd8ff', '#20140a', 0.55); scene.add(hemi);
-  const key = new THREE.DirectionalLight('#fff3e0', 1.5);
+  const key = new THREE.DirectionalLight('#fff3e0', 1.25);
   key.position.set(5, 11, 6); key.castShadow = true;
   key.shadow.mapSize.set(small ? 1024 : 1536, small ? 1024 : 1536);
   key.shadow.radius = 4;
@@ -370,8 +370,14 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   const kingMat = mats[loserColor].clone();
   king.traverse((o) => { if (o.isMesh) o.material = kingMat; });
   const kingPos = sqPos(kingSq).setY(0.1);
+  // Die Figur, die Matt gesetzt hat (Fallback: nächste Figur des Siegers)
+  let attacker = attackerSq ? pieces.get(attackerSq) : null;
+  if (!attacker || attacker.color === loserColor) {
+    let best = 99;
+    for (const pc of pieces.values()) { if (pc.color === loserColor) continue; const d = pc.g.position.distanceTo(kingPos); if (d < best) { best = d; attacker = pc; } }
+  }
   // Dramatisches Spotlicht auf den König
-  const spot = new THREE.SpotLight('#ffe9c7', 16, 18, 0.42, 0.75, 1.4);
+  const spot = new THREE.SpotLight('#ffe9c7', 11, 18, 0.42, 0.75, 1.4);
   spot.position.set(kingPos.x + 1.5, 8, kingPos.z + 2);
   spot.target.position.copy(kingPos);
   spot.castShadow = !small; spot.shadow.mapSize.set(1024, 1024); spot.shadow.bias = -0.0004;
@@ -411,7 +417,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     if (slow) { ctx.timeScale = 0.22; fx.slowRecover = 1; }
     overlay.classList.remove('hit'); void overlay.offsetWidth; overlay.classList.add('hit');
   };
-  const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera, frameParts, kingSq, sqPos, mats };
+  const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera, frameParts, kingSq, sqPos, mats, attacker };
   const effect = (EFFECTS[finisher] || EFFECTS.klassisch)(ctx);
   const TOTAL = effect.total || 7.6;
 
@@ -491,7 +497,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
       occDir.subVectors(tmp, camera.position);
       const len2 = occDir.lengthSq();
       for (const pc of pieces.values()) {
-        if (pc.g === king || !pc.mat) continue;
+        if (pc.g === king || pc === attacker || !pc.mat) continue;
         occP.copy(pc.g.position); occP.y += 0.5;
         occV.subVectors(occP, camera.position);
         const tt = Math.max(0, Math.min(1, occV.dot(occDir) / len2));
@@ -1280,6 +1286,530 @@ Object.assign(EFFECTS, {
           hammer.position.y = kingPos.y + 1.42 + up * 16; hammer.rotation.y += dt * 8 * up;
           if (Math.random() < 0.5) parts.spawn(V(kingPos.x + rand(-0.6, 0.6), 0.15, kingPos.z + rand(-0.6, 0.6)), V(0, rand(0.5, 1.5), 0), C('#9fe3ff').multiplyScalar(1.3), rand(0.3, 0.7));
         }
+      },
+    };
+  },
+});
+
+// ------------------------------------------------------------ 12 neue Finisher (v1.6)
+const towards = (from, to) => { const d = to.clone().sub(from).setY(0); return d.lengthSq() ? d.normalize() : V(0, 0, -1); };
+const yawTo = (dir) => Math.atan2(dir.x, dir.z);
+
+Object.assign(EFFECTS, {
+  // 🔫 Kugelhagel: Matt-Figur zieht ein Sturmgewehr und ballert den König weg
+  ak(ctx) {
+    const { scene, king, kingPos, kingMat, parts, bigParts, debris, attacker, cam } = ctx;
+    const A = attacker?.g; const a0 = A ? A.position.clone() : kingPos.clone().add(V(2, 0, 2));
+    const dir = towards(a0, kingPos), side = V(dir.z, 0, -dir.x);
+    const gunMetal = new THREE.MeshStandardMaterial({ color: '#1d1f22', metalness: 0.8, roughness: 0.35 });
+    const woodM = new THREE.MeshStandardMaterial({ color: '#7a4a22', roughness: 0.7 });
+    const gun = new THREE.Group();
+    const part = (geo, mat, x, y, z, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.z = rz; m.castShadow = true; gun.add(m); return m; };
+    part(new THREE.BoxGeometry(0.55, 0.11, 0.08), gunMetal, 0, 0, 0);
+    part(new THREE.CylinderGeometry(0.022, 0.022, 0.42, 10), gunMetal, 0.46, 0.02, 0, Math.PI / 2);
+    part(new THREE.BoxGeometry(0.08, 0.22, 0.06), gunMetal, 0.08, -0.14, 0, -0.25);
+    part(new THREE.BoxGeometry(0.26, 0.1, 0.065), woodM, -0.36, -0.03, 0, 0.12);
+    part(new THREE.BoxGeometry(0.2, 0.06, 0.07), woodM, 0.3, -0.05, 0);
+    gun.scale.setScalar(0.001); scene.add(gun);
+    const muzzleLocal = V(0.68, 0.02, 0);
+    let nextShot = 2.55, shots = 0, dead = false;
+    const tracerMat = new THREE.MeshBasicMaterial({ color: C('#ffd27a').multiplyScalar(4) });
+    const tracers = [];
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 4.6; cam.heightEnd = 2; cam.orbit = 0.04;
+        cam.look.lerp(a0.clone().lerp(kingPos, 0.5).setY(0.7), 1 - Math.exp(-dt * 2));
+        if (A) {
+          const hop = seg(t, 1.8, 2.3);
+          A.position.y = a0.y + Math.sin(hop * Math.PI) * 0.5;
+          A.rotation.y = yawTo(dir) * Math.min(1, hop * 2);
+        }
+        const gs = ease.out(seg(t, 2.1, 2.45));
+        const recoil = t > 2.55 && !dead ? Math.sin(t * 90) * 0.03 : 0;
+        gun.scale.setScalar(Math.max(0.001, gs));
+        gun.position.copy(a0).addScaledVector(side, 0.28).addScaledVector(dir, 0.1 - recoil).setY(a0.y + 0.72 + (A ? A.position.y - a0.y : 0));
+        gun.rotation.set(0, Math.atan2(-dir.z, dir.x), 0);
+        if (t > 2.5 && t < 2.6) sound.clink();
+        // Dauerfeuer
+        while (!dead && t >= nextShot && t < 4.4) {
+          nextShot += 0.075; shots++;
+          gun.updateMatrixWorld(true);
+          const m = gun.localToWorld(muzzleLocal.clone());
+          const hit = kingPos.clone().add(V(rand(-0.15, 0.15), rand(0.3, 1.1), rand(-0.15, 0.15)));
+          const len = m.distanceTo(hit);
+          const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, len, 4), tracerMat);
+          tr.position.copy(m).lerp(hit, 0.5); tr.quaternion.setFromUnitVectors(V(0, 1, 0), hit.clone().sub(m).normalize());
+          scene.add(tr); tracers.push({ m: tr, life: 0.05 });
+          bigParts.spawn(m, V(0, 0, 0), C('#ffcf5a').multiplyScalar(1.4), 0.06);
+          for (let i = 0; i < 8; i++) parts.spawn(hit, V(rand(-1, 1), rand(0, 1.5), rand(-1, 1)).addScaledVector(dir, 2).multiplyScalar(rand(1, 3)), C(i % 2 ? '#ffd27a' : '#ffffff').multiplyScalar(1.5), rand(0.15, 0.4), 6);
+          parts.spawn(gun.localToWorld(V(0.05, 0.05, 0)), side.clone().multiplyScalar(rand(1, 2)).add(V(0, rand(1.5, 2.5), 0)), C('#d4a84a').multiplyScalar(0.9), 0.8, 9);
+          ctx.fxLight.position.copy(m); ctx.fxLight.color.set('#ffb347'); ctx.fxLight.intensity = 25;
+          if (shots % 2) sound.shot();
+          king.position.set(kingPos.x + dir.x * 0.04 * Math.random(), kingPos.y, kingPos.z + dir.z * 0.04 * Math.random());
+          king.rotation.x = Math.sin(t * 60) * 0.05;
+          kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.set('#ff8a3a'); kingMat.emissiveIntensity = 0.2 + seg(t, 2.6, 4.3) * 0.6;
+          ctx.shake(0.03, 0.12);
+        }
+        ctx.fxLight.intensity *= 0.7;
+        for (const tr of tracers) { tr.life -= dt; if (tr.life <= 0 && tr.m.parent) scene.remove(tr.m); }
+        if (t >= 4.4 && !dead) {
+          dead = true; king.visible = false; sound.boom(); ctx.impact(1.3);
+          debris.burst(kingPos, kingMat, 55, { speed: 3, up: 4, size: [0.05, 0.15] });
+          for (const it of debris.items.slice(-55)) it.v.addScaledVector(dir, 7);
+          for (let i = 0; i < 300; i++) parts.spawn(V(kingPos.x, 0.6, kingPos.z), V(rand(-1, 1), rand(0, 1.2), rand(-1, 1)).normalize().multiplyScalar(rand(2, 7)).addScaledVector(dir, 4), C(i % 3 ? '#ffb347' : '#ffffff').multiplyScalar(1.4), rand(0.4, 1.2), 5, 1);
+        }
+        if (dead) gun.rotation.x += dt * 10 * Math.max(0, 1 - (t - 4.4)); // Waffe lässig drehen
+      },
+    };
+  },
+
+  // ✨ Midas-Touch: Matt-Figur berührt den König, er wird zu Gold
+  midas(ctx) {
+    const { scene, king, kingPos, kingMat, parts, debris, attacker, cam } = ctx;
+    const A = attacker?.g; const a0 = A ? A.position.clone() : kingPos.clone().add(V(1.5, 0, 1.5));
+    const dir = towards(a0, kingPos);
+    const target = kingPos.clone().addScaledVector(dir, -0.72).setY(a0.y);
+    const gold = C('#ffc53d'), c0 = kingMat.color.clone();
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.03, 10, 48), new THREE.MeshBasicMaterial({ color: C('#ffe08a').multiplyScalar(3), transparent: true, opacity: 0 }));
+    ring.rotation.x = Math.PI / 2; ring.position.copy(kingPos); scene.add(ring);
+    const coinMat = new THREE.MeshStandardMaterial({ color: '#ffcc33', metalness: 1, roughness: 0.25, emissive: C('#7a5200'), emissiveIntensity: 0.3 });
+    let touched = false, shine = false, rain = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 3.6; cam.heightEnd = 1.7; cam.orbit = 0.12;
+        if (A) {
+          const k = ease.inOut(seg(t, 1.8, 2.6));
+          A.position.lerpVectors(a0, target, k); A.position.y = a0.y + Math.sin(k * Math.PI) * 0.35;
+          A.rotation.y = yawTo(dir) * k;
+          A.rotation.x = t > 2.6 && t < 3 ? Math.sin(seg(t, 2.6, 3) * Math.PI) * 0.35 : 0; // „Antippen“
+        }
+        if (t >= 2.75 && !touched) { touched = true; sound.clink(); ctx.impact(0.5, { slow: false }); }
+        if (touched) {
+          const p = ease.inOut(seg(t, 2.8, 4.1));
+          kingMat.color.copy(c0).lerp(gold, p);
+          kingMat.metalness = THREE.MathUtils.lerp(0.1, 1, p); kingMat.roughness = THREE.MathUtils.lerp(0.4, 0.18, p);
+          kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.set('#8a5a00'); kingMat.emissiveIntensity = p * 0.35;
+          ring.position.y = kingPos.y + 0.05 + p * 1.25; ring.material.opacity = p < 1 ? 1 : Math.max(0, ring.material.opacity - dt * 2);
+          ring.scale.setScalar(1 - p * 0.45);
+          if (p < 1) for (let i = 0; i < 5; i++) { const a = Math.random() * 6.28; parts.spawn(V(kingPos.x + Math.cos(a) * 0.3, ring.position.y, kingPos.z + Math.sin(a) * 0.3), V(Math.cos(a) * 0.6, rand(0.2, 0.8), Math.sin(a) * 0.6), C('#ffe08a').multiplyScalar(1.6), rand(0.4, 0.8)); }
+        }
+        if (t >= 4.15 && !shine) {
+          shine = true; sound.win(); ctx.flash(0.5, '#ffe9a8');
+          ctx.fxLight.position.set(kingPos.x, 1.5, kingPos.z); ctx.fxLight.color.set('#ffd27a'); ctx.fxLight.intensity = 50;
+          for (let i = 0; i < 200; i++) parts.spawn(V(kingPos.x, rand(0.2, 1.3), kingPos.z), V(rand(-1, 1), rand(-0.2, 1), rand(-1, 1)).normalize().multiplyScalar(rand(1, 3)), C('#fff1b8').multiplyScalar(1.8), rand(0.5, 1.4), 0.5, 1);
+        }
+        if (t >= 4.5 && !rain) {
+          rain = true;
+          for (let i = 0; i < 45; i++) {
+            const c = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 20), coinMat); c.castShadow = true;
+            c.position.set(kingPos.x + rand(-1.5, 1.5), rand(3, 7), kingPos.z + rand(-1.5, 1.5)); scene.add(c);
+            debris.items.push({ m: c, v: V(0, rand(-1, 0), 0), w: V(rand(-8, 8), rand(-8, 8), rand(-8, 8)), r: 0.01 });
+          }
+        }
+        ctx.fxLight.intensity *= 0.97;
+        if (t > 4.2) king.rotation.y += dt * 0.6;
+      },
+    };
+  },
+
+  // 🔥 Feuersturm: Flammen vom Himmel, König schmilzt
+  feuersturm(ctx) {
+    const { scene, king, kingPos, kingMat, parts, bigParts, cam } = ctx;
+    const src = kingPos.clone().add(V(-4.5, 6, -3.5));
+    const puddle = new THREE.Mesh(new THREE.CircleGeometry(0.6, 40), new THREE.MeshBasicMaterial({ color: C('#ff5a1a').multiplyScalar(1.5), transparent: true, opacity: 0 }));
+    puddle.rotation.x = -Math.PI / 2; puddle.position.set(kingPos.x, 0.106, kingPos.z); scene.add(puddle);
+    let roar = false, melt = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 4.4; cam.heightEnd = 2.1;
+        const d = seg(t, 1.8, 2.3); ctx.bg.copy(C('#07080d').lerp(C('#2a0802'), d));
+        if (t > 2.2 && !roar) { roar = true; sound.whoosh(); sound.wind(); ctx.impact(0.5, { slow: false }); }
+        if (t > 2.2 && t < 4.3) {
+          const toK = kingPos.clone().setY(0.6).sub(src).normalize();
+          for (let i = 0; i < 34; i++) parts.spawn(src.clone().add(V(rand(-0.3, 0.3), rand(-0.3, 0.3), rand(-0.3, 0.3))), toK.clone().multiplyScalar(rand(7, 10)).add(V(rand(-1, 1), rand(-1, 1), rand(-1, 1))), C(['#fff1b8', '#ffb347', '#ff5a1a', '#c2240c'][i % 4]).multiplyScalar(1.6), rand(0.6, 1.1), -1, 0.4);
+          for (let i = 0; i < 3; i++) bigParts.spawn(src.clone().lerp(kingPos, rand(0.3, 1)), V(rand(-0.5, 0.5), rand(0.5, 1.5), rand(-0.5, 0.5)), C('#ff6a1a').multiplyScalar(0.35), rand(0.4, 0.8));
+          kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.set('#ff4a00'); kingMat.emissiveIntensity = seg(t, 2.3, 3.4) * 1.2;
+          ctx.fxLight.position.set(kingPos.x, 1, kingPos.z); ctx.fxLight.color.set('#ff7a1a'); ctx.fxLight.intensity = 40 + Math.sin(t * 30) * 10;
+          ctx.shake(0.025, 0.15);
+        }
+        if (t > 3.4) {
+          if (!melt) { melt = true; sound.boom(); }
+          const m = ease.in(seg(t, 3.4, 4.8));
+          king.scale.set(1 + m * 0.8, Math.max(0.04, 1 - m), 1 + m * 0.8);
+          kingMat.color.lerp(C('#1a0a04'), dt * 0.8);
+          puddle.material.opacity = m; puddle.scale.setScalar(0.4 + m * 1.4);
+          if (Math.random() < 0.8) parts.spawn(V(kingPos.x + rand(-0.6, 0.6), 0.15, kingPos.z + rand(-0.6, 0.6)), V(0, rand(0.5, 2), 0), C('#ff7a1a').multiplyScalar(1.2), rand(0.6, 1.4));
+        }
+        ctx.fxLight.intensity *= 0.98;
+      },
+    };
+  },
+
+  // 🚀 Raketenschlag: Rakete, Feuerball, Druckwelle wirft alles um
+  rakete(ctx) {
+    const { scene, king, kingPos, kingMat, parts, bigParts, debris, pieces, cam } = ctx;
+    const rocket = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 1.1, 16), new THREE.MeshStandardMaterial({ color: '#d9dde2', metalness: 0.6, roughness: 0.3 }));
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.35, 16), new THREE.MeshStandardMaterial({ color: '#c0262d', roughness: 0.4 })); tip.position.y = 0.72;
+    rocket.add(body, tip);
+    for (let i = 0; i < 4; i++) { const f = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.3, 0.22), tip.material); f.position.y = -0.45; f.rotation.y = (i * Math.PI) / 2; f.position.x = Math.cos(i * Math.PI / 2) * 0.12; f.position.z = Math.sin(i * Math.PI / 2) * 0.12; rocket.add(f); }
+    scene.add(rocket);
+    const start = kingPos.clone().add(V(-11, 9, -9)), end = kingPos.clone().setY(0.5);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 20), new THREE.MeshBasicMaterial({ color: C('#ffb347').multiplyScalar(2.5), transparent: true }));
+    ball.position.copy(end); ball.scale.setScalar(0.001); scene.add(ball);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 72), new THREE.MeshBasicMaterial({ color: C('#ffd27a').multiplyScalar(2), transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(kingPos.x, 0.15, kingPos.z); ring.visible = false; scene.add(ring);
+    let launched = false, boom = false, tb = 0;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = boom ? 9 : 6; cam.heightEnd = boom ? 4 : 2.6; cam.orbit = 0.04;
+        if (t > 1.8 && !launched) { launched = true; sound.whoosh(); }
+        if (!boom) {
+          const k = ease.in(seg(t, 1.8, 3.0));
+          const pos = start.clone().lerp(end, k); pos.y += Math.sin(k * Math.PI) * 2;
+          const next = start.clone().lerp(end, Math.min(1, k + 0.02)); next.y += Math.sin(Math.min(1, k + 0.02) * Math.PI) * 2;
+          rocket.position.copy(pos); rocket.quaternion.setFromUnitVectors(V(0, 1, 0), next.clone().sub(pos).normalize());
+          for (let i = 0; i < 6; i++) parts.spawn(pos, V(rand(-0.4, 0.4), rand(-0.4, 0.4), rand(-0.4, 0.4)), C(i % 2 ? '#ffb347' : '#fff1c4').multiplyScalar(1.4), rand(0.15, 0.35));
+          bigParts.spawn(pos, V(rand(-0.2, 0.2), rand(0, 0.3), rand(-0.2, 0.2)), C('#8a8a8a').multiplyScalar(0.22), rand(1, 1.8));
+          if (k >= 1) {
+            boom = true; tb = t; rocket.visible = false; king.visible = false; ring.visible = true;
+            sound.boom(); sound.boom(); ctx.impact(1.7);
+            ctx.fxLight.position.set(kingPos.x, 1.5, kingPos.z); ctx.fxLight.color.set('#ff9a3a'); ctx.fxLight.intensity = 120;
+            debris.burst(kingPos, kingMat, 40, { speed: 7, up: 8 });
+            for (const pc of pieces.values()) {
+              if (pc.g === king) continue;
+              const off = pc.g.position.clone().sub(kingPos).setY(0); const dd = off.length();
+              if (dd < 3.2) debris.items.push({ m: pc.g, v: off.normalize().multiplyScalar((3.4 - dd) * 3).add(V(0, (3.4 - dd) * 2.4, 0)), w: V(rand(-6, 6), rand(-6, 6), rand(-6, 6)), r: 0.02 });
+            }
+            for (let i = 0; i < 1200; i++) parts.spawn(end, V(rand(-1, 1), rand(0, 1), rand(-1, 1)).normalize().multiplyScalar(rand(2, 12)), C(['#ffffff', '#ffd27a', '#ff8a2a', '#c2240c'][i % 4]).multiplyScalar(1.5), rand(0.5, 1.8), 4, 1.2);
+          }
+        } else {
+          const k = t - tb;
+          ball.scale.setScalar(Math.min(2.4, 0.3 + k * 6)); ball.material.opacity = Math.max(0, 1 - k * 1.2);
+          ring.scale.setScalar(1 + k * 12); ring.material.opacity = Math.max(0, 1 - k * 0.9);
+          if (k < 2.5) for (let i = 0; i < 4; i++) bigParts.spawn(V(kingPos.x + rand(-0.4, 0.4), 0.4 + k * 2.2, kingPos.z + rand(-0.4, 0.4)), V(rand(-0.6, 0.6), rand(1, 2), rand(-0.6, 0.6)), C(k < 0.8 ? '#ff7a1a' : '#6a6a6a').multiplyScalar(k < 0.8 ? 0.6 : 0.2), rand(1, 2)); // Rauchpilz
+          ctx.fxLight.intensity *= 0.94;
+          cam.lookY = Math.min(1.8, k * 1.2);
+        }
+      },
+    };
+  },
+
+  // 🛸 Entführung: UFO beamt den König hoch
+  ufo(ctx) {
+    const { scene, king, kingPos, parts, cam } = ctx;
+    const ufo = new THREE.Group();
+    const hull = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 16), new THREE.MeshStandardMaterial({ color: '#9aa3ad', metalness: 0.9, roughness: 0.25 })); hull.scale.set(1.3, 0.28, 1.3);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#8fe8ff', transparent: true, opacity: 0.55, emissive: C('#3ab4ff'), emissiveIntensity: 0.4 })); dome.position.y = 0.15;
+    ufo.add(hull, dome);
+    const lights = [];
+    for (let i = 0; i < 10; i++) { const a = (i / 10) * Math.PI * 2; const l = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), new THREE.MeshBasicMaterial({ color: C('#7fff9a').multiplyScalar(3) })); l.position.set(Math.cos(a) * 1.15, -0.05, Math.sin(a) * 1.15); ufo.add(l); lights.push(l); }
+    ufo.position.set(kingPos.x + 14, 9, kingPos.z - 10); scene.add(ufo);
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 1.1, 4, 40, 1, true), new THREE.MeshBasicMaterial({ color: C('#8affb0').multiplyScalar(1.4), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    beam.position.set(kingPos.x, 2.1, kingPos.z); scene.add(beam);
+    const hover = V(kingPos.x, 4.2, kingPos.z);
+    let hum = false, gone = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 6.5; cam.heightEnd = 2.4; cam.lookY = Math.min(1.8, seg(t, 2.4, 4) * 1.8);
+        ctx.bg.copy(C('#07080d').lerp(C('#020611'), seg(t, 1.8, 2.4)));
+        lights.forEach((l, i) => { l.material.color.setHSL(((t * 0.6 + i / 10) % 1), 1, 0.6).multiplyScalar(2.5); });
+        if (t < 4.6) {
+          const k = ease.out(seg(t, 1.8, 2.7));
+          ufo.position.lerpVectors(V(kingPos.x + 14, 9, kingPos.z - 10), hover, k);
+          ufo.position.y += Math.sin(t * 3) * 0.08; ufo.rotation.y += dt * 2;
+        }
+        if (t > 2.7 && t < 4.5) {
+          if (!hum) { hum = true; sound.wind(); }
+          beam.material.opacity = Math.min(0.45, beam.material.opacity + dt) * (0.85 + Math.random() * 0.15);
+          const k = ease.inOut(seg(t, 2.9, 4.4));
+          king.position.set(kingPos.x, kingPos.y + k * 3.7, kingPos.z); king.rotation.y += dt * (2 + k * 8); king.rotation.z = Math.sin(t * 2) * 0.3 * k;
+          king.scale.setScalar(1 - k * 0.6);
+          for (let i = 0; i < 6; i++) parts.spawn(V(kingPos.x + rand(-0.8, 0.8), 0.2, kingPos.z + rand(-0.8, 0.8)), V(0, rand(1.5, 3), 0), C('#9affc0').multiplyScalar(1.2), rand(0.6, 1.2));
+          if (k >= 1) king.visible = false;
+        } else if (t >= 4.5) beam.material.opacity = Math.max(0, beam.material.opacity - dt * 3);
+        if (t >= 4.7) {
+          if (!gone) { gone = true; sound.whoosh(); ctx.flash(0.4, '#c8ffd8'); }
+          const k = ease.in(seg(t, 4.7, 5.3));
+          ufo.position.lerpVectors(hover, V(kingPos.x - 25, 14, kingPos.z - 20), k);
+          if (k < 1) parts.spawn(ufo.position, V(0, 0, 0), C('#9affc0').multiplyScalar(1.5), 0.4);
+        }
+      },
+    };
+  },
+
+  // 🌟 Supernova: König glüht, implodiert, explodiert – alle Figuren fliegen
+  supernova(ctx) {
+    const { scene, king, kingPos, kingMat, parts, debris, pieces, cam } = ctx;
+    const core = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), new THREE.MeshBasicMaterial({ color: C('#ffffff').multiplyScalar(4), transparent: true }));
+    core.position.copy(kingPos).setY(0.7); core.scale.setScalar(0.001); scene.add(core);
+    const rings = [0, 1].map((i) => { const r = new THREE.Mesh(new THREE.RingGeometry(0.95, 1, 80), new THREE.MeshBasicMaterial({ color: C(i ? '#9a7cff' : '#7fd4ff').multiplyScalar(2.5), transparent: true, side: THREE.DoubleSide, depthWrite: false })); r.position.copy(core.position); r.rotation.x = i ? 1.1 : -Math.PI / 2; r.visible = false; scene.add(r); return r; });
+    let imploded = false, exploded = false, te = 0;
+    return {
+      total: 8.4,
+      update(t, dt, realDt) {
+        cam.distEnd = exploded ? 9 : 5; cam.heightEnd = exploded ? 4 : 2.2;
+        const g = seg(t, 1.8, 3.3);
+        ctx.bg.copy(C('#07080d').lerp(C('#010104'), g)); ctx.hemi.intensity = 0.55 * (1 - g * 0.8); ctx.key.intensity = 1.5 * (1 - g * 0.8);
+        if (!exploded) {
+          kingMat.emissive = kingMat.emissive || C('#000'); kingMat.emissive.set('#cfe8ff'); kingMat.emissiveIntensity = g * 5;
+          king.rotation.y += dt * g * 6; king.position.x = kingPos.x + rand(-0.02, 0.02) * g;
+          ctx.fxLight.position.copy(core.position); ctx.fxLight.color.set('#bfe0ff'); ctx.fxLight.intensity = g * 60 * (1 + Math.sin(t * 25) * 0.2);
+          for (let i = 0; i < 10 * g; i++) { const dir = V(rand(-1, 1), rand(-0.3, 1), rand(-1, 1)).normalize(); const p0 = core.position.clone().addScaledVector(dir, 3.5); parts.spawn(p0, dir.multiplyScalar(-4.5), C('#cfe8ff').multiplyScalar(1.4), 0.75); }
+          ctx.base.aberr = g * 0.8;
+        }
+        if (t >= 3.3 && !imploded) { imploded = true; sound.whoosh(); ctx.timeScale = 0.35; }
+        if (imploded && !exploded) king.scale.setScalar(Math.max(0.05, 1 - ease.in(seg(t, 3.3, 3.6))));
+        if (t >= 3.6 && !exploded) {
+          exploded = true; te = t; king.visible = false; ctx.base.aberr = 0;
+          sound.boom(); sound.boom(); ctx.impact(2); ctx.flash(0.6, '#e6f2ff');
+          rings.forEach((r) => { r.visible = true; });
+          for (const pc of pieces.values()) {
+            if (pc.g === king) continue;
+            const off = pc.g.position.clone().sub(kingPos).setY(0); const dd = Math.max(0.5, off.length());
+            debris.items.push({ m: pc.g, v: off.normalize().multiplyScalar(14 / dd + 2).add(V(0, 9 / dd + 1, 0)), w: V(rand(-10, 10), rand(-10, 10), rand(-10, 10)), r: 0.02 });
+          }
+          for (let i = 0; i < 1600; i++) parts.spawn(core.position, V(rand(-1, 1), rand(-0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(3, 16)), C(['#ffffff', '#bfe0ff', '#9a7cff', '#ffd27a'][i % 4]).multiplyScalar(1.6), rand(0.8, 2.4), 0, 0.8);
+          ctx.fxLight.intensity = 300;
+        }
+        if (exploded) {
+          const k = t - te;
+          core.scale.setScalar(Math.min(7, 0.2 + k * 14)); core.material.opacity = Math.max(0, 1 - k * 1.4);
+          rings.forEach((r, i) => { r.scale.setScalar(1 + k * (16 + i * 6)); r.material.opacity = Math.max(0, 1 - k * 0.7); });
+          ctx.fxLight.intensity *= 0.93;
+          ctx.hemi.intensity = Math.min(0.55, ctx.hemi.intensity + realDt * 0.3);
+        }
+      },
+    };
+  },
+
+  // 🌀 Portal-Schleife: König fällt durch ein Portal und schlägt von oben wieder ein
+  portal(ctx) {
+    const { scene, king, kingPos, kingMat, parts, debris, cam } = ctx;
+    const mkPortal = (color) => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.06, 16, 64), new THREE.MeshBasicMaterial({ color: C(color).multiplyScalar(3) })));
+      g.add(new THREE.Mesh(new THREE.CircleGeometry(0.6, 48), new THREE.MeshBasicMaterial({ color: '#05020c' })));
+      g.rotation.x = -Math.PI / 2; g.scale.setScalar(0.001); scene.add(g); return g;
+    };
+    const p1 = mkPortal('#ff8a1a'), p2 = mkPortal('#2ab4ff');
+    p1.position.set(kingPos.x, 0.115, kingPos.z); p2.position.set(kingPos.x, 6, kingPos.z); p2.rotation.x = Math.PI / 2;
+    let fell = false, crashed = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 6; cam.heightEnd = 2.6; cam.lookY = t > 3.4 && !crashed ? 1.6 : Math.max(0, cam.lookY - dt);
+        p1.scale.setScalar(Math.max(0.001, ease.out(seg(t, 1.9, 2.4)) * (1 - ease.in(seg(t, 3.5, 3.8))) * 1.4));
+        p1.rotation.z += dt * 4;
+        if (t > 2.4 && t < 3.5) {
+          const k = ease.in(seg(t, 2.5, 3.4));
+          king.position.y = kingPos.y - k * 1.6; king.rotation.y += dt * 10;
+          if (!fell && k > 0.05) { fell = true; sound.whoosh(); }
+          for (let i = 0; i < 6; i++) { const a = Math.random() * 6.28; parts.spawn(V(kingPos.x + Math.cos(a) * 0.8, 0.15, kingPos.z + Math.sin(a) * 0.8), V(-Math.sin(a) * 2 - Math.cos(a), 0.3, Math.cos(a) * 2 - Math.sin(a)), C('#ffb347').multiplyScalar(1.3), 0.4); }
+        }
+        p2.scale.setScalar(Math.max(0.001, ease.out(seg(t, 3.6, 3.9)) * (1 - ease.in(seg(t, 4.5, 4.8))) * 1.4));
+        p2.rotation.z -= dt * 4;
+        if (t >= 3.9 && !crashed) {
+          const k = t - 3.9;
+          king.position.y = 5.8 - 0.5 * 30 * k * k; king.rotation.x += dt * 9;
+          for (let i = 0; i < 3; i++) parts.spawn(king.position, V(rand(-0.3, 0.3), 1, rand(-0.3, 0.3)), C('#7fd4ff').multiplyScalar(1.3), 0.4);
+          if (king.position.y <= kingPos.y + 0.2) {
+            crashed = true; king.visible = false; sound.boom(); ctx.impact(1.4);
+            debris.burst(kingPos, kingMat, 60, { speed: 5, up: 5 });
+            for (let i = 0; i < 500; i++) parts.spawn(V(kingPos.x, 0.3, kingPos.z), V(rand(-1, 1), rand(0, 1), rand(-1, 1)).normalize().multiplyScalar(rand(2, 8)), C(i % 2 ? '#7fd4ff' : '#ffb347').multiplyScalar(1.5), rand(0.4, 1.2), 5, 1);
+          }
+        }
+      },
+    };
+  },
+
+  // 🐙 Tiefseekrake: Tentakel ziehen den König ins Brett
+  krake(ctx) {
+    const { scene, king, kingPos, parts, bigParts, cam } = ctx;
+    const mat = new THREE.MeshStandardMaterial({ color: '#7a2a8f', roughness: 0.45, metalness: 0.1, emissive: C('#2a0636'), emissiveIntensity: 0.5 });
+    const N = 16;
+    const tentacles = [0, 1, 2, 3, 4].map((i) => {
+      const a = (i / 5) * Math.PI * 2 + 0.3;
+      const base = V(kingPos.x + Math.cos(a) * 0.95, 0.05, kingPos.z + Math.sin(a) * 0.95);
+      const segs = Array.from({ length: N }, (_, j) => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.15 * (1 - j / N) + 0.035, 14, 10), mat); m.castShadow = true; scene.add(m); m.visible = false; return m; });
+      return { base, segs, ph: rand(0, 6) };
+    });
+    let rise = false, grab = false, gone = false;
+    return {
+      total: 8.2,
+      update(t, dt) {
+        cam.distEnd = 4.8; cam.heightEnd = 2.4;
+        const up = ease.out(seg(t, 2.0, 2.8)), down = ease.in(seg(t, 3.6, 4.8));
+        const h = 2.1 * up * (1 - down);
+        if (t > 2 && !rise) { rise = true; sound.boom(); ctx.impact(0.8, { slow: false }); for (let i = 0; i < 160; i++) bigParts.spawn(V(kingPos.x + rand(-1.2, 1.2), 0.2, kingPos.z + rand(-1.2, 1.2)), V(rand(-1, 1), rand(1, 3), rand(-1, 1)), C('#5a2a8a').multiplyScalar(0.5), rand(0.6, 1.2), 3); }
+        const curl = ease.inOut(seg(t, 2.6, 3.2));
+        for (const tc of tentacles) tc.segs.forEach((m, j) => {
+          const s = j / (N - 1);
+          m.visible = h > 0.05;
+          const wig = Math.sin(t * 4 + j * 0.6 + tc.ph) * 0.25 * s;
+          const p = tc.base.clone();
+          p.y = 0.05 + s * h;
+          const toK = kingPos.clone().sub(tc.base).setY(0);
+          p.addScaledVector(toK, curl * s * s * 0.95).add(V(wig, 0, Math.cos(t * 3.4 + j * 0.5 + tc.ph) * 0.2 * s));
+          m.position.copy(p);
+        });
+        if (t > 3.1 && !grab) { grab = true; sound.thud(); ctx.impact(0.6, { slow: false }); }
+        if (grab && !gone) {
+          king.rotation.z = Math.sin(t * 20) * 0.15 * (1 - down);
+          king.position.y = kingPos.y - down * 1.8;
+          if (down > 0.25) for (let i = 0; i < 3; i++) parts.spawn(V(kingPos.x + rand(-0.5, 0.5), 0.15, kingPos.z + rand(-0.5, 0.5)), V(rand(-1, 1), rand(1, 3), rand(-1, 1)), C('#b46cff').multiplyScalar(1.1), rand(0.4, 0.9), 4);
+          if (down >= 1) { gone = true; king.visible = false; sound.boom(); ctx.impact(0.9); }
+        }
+      },
+    };
+  },
+
+  // 🎳 Strike: Bowlingkugel räumt alles ab
+  bowling(ctx) {
+    const { scene, king, kingPos, pieces, debris, parts, cam } = ctx;
+    const ballM = new THREE.MeshPhysicalMaterial({ color: '#3a1c8a', metalness: 0.2, roughness: 0.15, clearcoat: 1 });
+    const ball = new THREE.Group();
+    const sph = new THREE.Mesh(new THREE.SphereGeometry(0.62, 40, 28), ballM); sph.castShadow = true; ball.add(sph);
+    for (const [x, y] of [[0.18, 0.5], [-0.05, 0.56], [0.08, 0.42]]) { const h = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 8), new THREE.MeshBasicMaterial({ color: '#0a0510' })); h.position.set(x, y, 0.28); ball.add(h); }
+    const startX = kingPos.x < 0 ? 7 : -7, dirX = -Math.sign(startX);
+    ball.position.set(startX, 0.72, kingPos.z); scene.add(ball);
+    const hitSet = new Set();
+    let rolling = false, kingHit = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 6.5; cam.heightEnd = 2.6;
+        if (t < 1.9) return;
+        if (!rolling) { rolling = true; sound.wind(); }
+        const speed = 8.5;
+        ball.position.x += dirX * speed * dt; ball.rotation.z -= dirX * (speed / 0.62) * dt;
+        if (Math.random() < 0.6) parts.spawn(V(ball.position.x, 0.12, ball.position.z + rand(-0.4, 0.4)), V(-dirX * 1, 0.5, rand(-0.5, 0.5)), C('#ffffff').multiplyScalar(0.6), 0.3);
+        for (const pc of pieces.values()) {
+          if (hitSet.has(pc)) continue;
+          const dx = pc.g.position.x - ball.position.x, dz = pc.g.position.z - ball.position.z;
+          if (Math.abs(dz) < 1.15 && Math.abs(dx) < 0.7) {
+            hitSet.add(pc);
+            const isK = pc.g === king;
+            debris.items.push({ m: pc.g, v: V(dirX * rand(5, 9) * (isK ? 1.6 : 1), rand(3, 6) * (isK ? 1.7 : 1), Math.sign(dz || 1) * rand(1, 4)), w: V(rand(-10, 10), rand(-10, 10), rand(-14, 14)), r: 0.02 });
+            sound.thud();
+            for (let i = 0; i < 30; i++) parts.spawn(pc.g.position.clone().setY(0.6), V(rand(-1, 1), rand(0, 1.4), rand(-1, 1)).multiplyScalar(4), C('#ffd27a').multiplyScalar(1.4), rand(0.2, 0.6), 5);
+            if (isK && !kingHit) { kingHit = true; ctx.impact(1.3); sound.boom(); }
+          }
+        }
+        if (kingHit) cam.look.lerp(V(king.position.x, Math.max(0.6, king.position.y * 0.6), king.position.z), 1 - Math.exp(-dt * 2));
+      },
+    };
+  },
+
+  // 🪐 Schwerkraftbruch: alles schwebt, dann schlägt die Schwerkraft zehnfach zu
+  schwerkraft(ctx) {
+    const { king, kingPos, kingMat, pieces, squares, debris, parts, cam } = ctx;
+    const floaters = [...pieces.values()].map((p) => ({ g: p.g, o: p.g.position.clone(), h: rand(1.2, 3.2) * (p.g === king ? 1.2 : 1), ph: rand(0, 6), rx: rand(-1, 1), rz: rand(-1, 1) }));
+    const sq = squares.map((m) => ({ m, o: m.position.clone(), h: rand(0.2, 0.9), ph: rand(0, 6) }));
+    let slammed = false, ts = 0, boomed = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 8; cam.heightEnd = 3.6; cam.orbit = 0.1;
+        if (!slammed) {
+          const k = ease.inOut(seg(t, 1.8, 3.2));
+          for (const f of floaters) { f.g.position.y = f.o.y + k * f.h + Math.sin(t * 2 + f.ph) * 0.08 * k; f.g.rotation.x = f.rx * k * 0.8; f.g.rotation.z = f.rz * k * 0.8; }
+          for (const s of sq) s.m.position.y = s.o.y + k * s.h * 0.3 + Math.sin(t * 2 + s.ph) * 0.03 * k;
+          cam.lookY = k * 1.2;
+          if (t > 1.85 && t < 1.95) sound.whoosh();
+          if (t >= 3.6) {
+            slammed = true; ts = t; sound.zap();
+            for (const f of floaters) debris.items.push({ m: f.g, v: V(0, -18, 0), w: V(f.rx * 4, 0, f.rz * 4), r: 0.02 });
+          }
+        } else {
+          const k = seg(t, ts, ts + 0.25);
+          for (const s of sq) s.m.position.y = THREE.MathUtils.lerp(s.o.y + s.h * 0.3, s.o.y, k);
+          cam.lookY = Math.max(0, cam.lookY - dt * 3);
+          if (!boomed && king.position.y <= kingPos.y + 0.2) {
+            boomed = true; king.visible = false; sound.boom(); sound.thud(); ctx.impact(1.8);
+            debris.burst(kingPos, kingMat, 60, { speed: 6, up: 3 });
+            for (let i = 0; i < 900; i++) parts.spawn(V(rand(-4, 4), 0.15, rand(-4, 4)), V(rand(-1, 1), rand(1, 4), rand(-1, 1)), C(i % 2 ? '#cfe8ff' : '#ffffff').multiplyScalar(0.9), rand(0.3, 0.9), 6);
+          }
+        }
+      },
+    };
+  },
+
+  // ✴️ Klingensturm: Wurfsterne zerlegen den König
+  shuriken(ctx) {
+    const { scene, king, kingPos, kingMat, debris, parts, cam } = ctx;
+    const shape = new THREE.Shape();
+    for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2, r = i % 2 ? 0.07 : 0.28; i ? shape.lineTo(Math.cos(a) * r, Math.sin(a) * r) : shape.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: true, bevelSize: 0.01, bevelThickness: 0.01, bevelSegments: 1 });
+    const steel = new THREE.MeshStandardMaterial({ color: '#d7dde4', metalness: 1, roughness: 0.15 });
+    const stars = Array.from({ length: 10 }, (_, i) => {
+      const a = (i / 10) * Math.PI * 2 + rand(-0.2, 0.2);
+      const from = kingPos.clone().add(V(Math.cos(a) * 7, rand(0.8, 2.2), Math.sin(a) * 7));
+      const hit = kingPos.clone().add(V(rand(-0.1, 0.1), rand(0.35, 1.1), rand(-0.1, 0.1)));
+      const m = new THREE.Mesh(geo, steel); m.castShadow = true; m.visible = false; scene.add(m);
+      return { m, from, hit, t0: 2.0 + i * 0.16, out: hit.clone().add(hit.clone().sub(from).setY(0).normalize().multiplyScalar(3)).setY(0.14), done: false };
+    });
+    let cut = false;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 4.6; cam.heightEnd = 2;
+        for (const s of stars) {
+          if (t < s.t0) continue;
+          s.m.visible = true; s.m.rotation.x = Math.PI / 2; s.m.rotation.z += dt * 30;
+          const k = (t - s.t0) / 0.28;
+          if (k < 1) s.m.position.lerpVectors(s.from, s.hit, k);
+          else { const k2 = Math.min(1, (k - 1) * 1.5); s.m.position.lerpVectors(s.hit, s.out, k2); if (k2 >= 1) s.m.rotation.z -= dt * 30; }
+          if (k >= 1 && !s.done) {
+            s.done = true; sound.slash();
+            for (let i = 0; i < 20; i++) parts.spawn(s.hit, V(rand(-1, 1), rand(0, 1), rand(-1, 1)).multiplyScalar(rand(2, 4)), C(i % 2 ? '#ffffff' : '#bfe6ff').multiplyScalar(1.5), rand(0.2, 0.5), 5);
+            king.position.x = kingPos.x + rand(-0.05, 0.05); king.rotation.z = rand(-0.1, 0.1);
+            ctx.shake(0.04, 0.15);
+          }
+        }
+        if (t >= 4.0 && !cut) {
+          cut = true; king.visible = false; sound.shatter(); ctx.impact(1.2);
+          debris.burst(kingPos, kingMat, 26, { speed: 2.5, up: 2.5, size: [0.12, 0.26], geo: 'tetra', spread: 0.1 });
+        }
+      },
+    };
+  },
+
+  // 🏔️ Lawine: Schneebrocken rollen heran und begraben den König
+  lawine(ctx) {
+    const { scene, king, kingPos, parts, bigParts, debris, cam } = ctx;
+    const snow = new THREE.MeshStandardMaterial({ color: '#f4f8ff', roughness: 0.9, emissive: C('#8fb7d8'), emissiveIntensity: 0.08 });
+    const srcSide = kingPos.x < 0 ? 1 : -1;
+    let spawned = 0, rumble = 0, buried = false;
+    return {
+      total: 8.2,
+      update(t, dt) {
+        cam.distEnd = 6.5; cam.heightEnd = 3;
+        if (t > 1.8) for (let i = 0; i < 6; i++) parts.spawn(V(kingPos.x + rand(-6, 6), 7, kingPos.z + rand(-6, 6)), V(rand(-0.4, 0.4), -rand(1.2, 2), rand(-0.4, 0.4)), C('#ffffff').multiplyScalar(0.8), rand(3, 4));
+        if (t > 2.0 && t < 4.2) {
+          if (t - rumble > 0.4) { rumble = t; sound.thud(); }
+          ctx.shake(0.03, 0.2);
+          const want = Math.floor(seg(t, 2.0, 3.8) * 110);
+          while (spawned < want) {
+            spawned++;
+            const s = rand(0.12, 0.34);
+            const m = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 1), snow); m.castShadow = true;
+            m.position.set(kingPos.x + srcSide * rand(4, 6), rand(2.5, 5), kingPos.z + rand(-1.4, 1.4)); scene.add(m);
+            const toK = V(kingPos.x - m.position.x + rand(-0.5, 0.5), 0, kingPos.z - m.position.z + rand(-0.6, 0.6)).normalize();
+            debris.items.push({ m, v: toK.multiplyScalar(rand(4, 7)).add(V(0, rand(-1, 1), 0)), w: V(rand(-5, 5), rand(-5, 5), rand(-5, 5)), r: s });
+          }
+          for (let i = 0; i < 3; i++) bigParts.spawn(V(kingPos.x + srcSide * rand(0, 4), 0.4, kingPos.z + rand(-1.5, 1.5)), V(-srcSide * rand(1, 3), rand(0.5, 1.5), rand(-0.5, 0.5)), C('#ffffff').multiplyScalar(0.35), rand(0.8, 1.6));
+          king.rotation.z = -srcSide * ease.in(seg(t, 2.8, 3.8)) * 1.2;
+          king.position.x = kingPos.x - srcSide * ease.in(seg(t, 2.8, 3.8)) * 0.4;
+        }
+        // Schnee bremst auf dem Boden stark ab und bleibt liegen
+        for (const it of debris.items) if (it.m.material === snow && it.m.position.y < 0.12 + it.r + 0.02) { it.v.multiplyScalar(0.9); it.w.multiplyScalar(0.9); }
+        if (t > 4.2 && !buried) { buried = true; king.visible = false; sound.boom(); ctx.impact(0.9); for (let i = 0; i < 300; i++) parts.spawn(V(kingPos.x, rand(0.2, 0.8), kingPos.z), V(rand(-1, 1), rand(0.5, 2), rand(-1, 1)).multiplyScalar(2), C('#ffffff'), rand(0.6, 1.4), 2, 1.2); }
       },
     };
   },

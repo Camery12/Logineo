@@ -40,6 +40,7 @@ export const sound = {
   click() { tone({ freq: 600, type: 'sine', dur: 0.04, vol: 0.05 }); },
   notify() { tone({ freq: 740, type: 'sine', dur: 0.12, vol: 0.12 }); tone({ freq: 988, type: 'sine', dur: 0.2, vol: 0.12, delay: 0.1 }); },
   boom() { tone({ freq: 90, noise: true, dur: 0.9, vol: 0.9 }); tone({ freq: 70, type: 'sine', dur: 0.8, vol: 0.4, slide: -40 }); },
+  shot() { tone({ freq: 1400, noise: true, dur: 0.06, vol: 0.45 }); tone({ freq: 160, type: 'square', dur: 0.05, vol: 0.08, slide: -90 }); },
   zap() { tone({ freq: 3000, noise: true, dur: 0.35, vol: 0.6 }); tone({ freq: 120, type: 'sawtooth', dur: 0.3, vol: 0.12, slide: -80 }); },
   whoosh() { tone({ freq: 500, noise: true, dur: 0.8, vol: 0.35 }); },
   shatter() { for (let i = 0; i < 6; i++) tone({ freq: 3000 + Math.random() * 3000, noise: true, dur: 0.15, vol: 0.3, delay: i * 0.03 }); },
