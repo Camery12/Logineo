@@ -425,7 +425,7 @@ export class Engine {
   // Liefert {from, to, promotion, score, depth}
   // blunder: Wahrscheinlichkeit für einen „menschlichen“ Fehlzug – aber nur aus Zügen,
   // die höchstens `margin` Centipawns schlechter sind (keine völlig sinnlosen Züge mehr)
-  think({ maxDepth = 4, timeMs = 1500, noise = 0, blunder = 0, margin = 200 } = {}) {
+  think({ maxDepth = 4, timeMs = 1500, noise = 0, blunder = 0, margin = 200, full = false } = {}) {
     const legal = this.legalMoves();
     if (!legal.length) return null;
     const toObj = (m, extra = {}) => ({ from: sqName(mFrom(m)), to: sqName(mTo(m)), promotion: mPro(m) ? ' pnbrqk'[mPro(m)] : undefined, ...extra });
@@ -455,7 +455,8 @@ export class Engine {
         while (this.stack.length > base) this.unmake();
         break;
       }
-      if (performance.now() > this.deadline - timeMs * 0.45) break;
+      // normale Bots hören früh auf; Hugo nutzt die ganze Zeit für eine tiefere Suche
+      if (performance.now() > this.deadline - timeMs * (full ? 0.08 : 0.45)) break;
     }
     this.rootNoise = null;
     return toObj(best, { score: bestScore, depth: reached, nodes: this.nodes });

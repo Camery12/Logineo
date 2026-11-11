@@ -638,3 +638,26 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
 .admin-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 900; letter-spacing: .08em; color: #fff; background: linear-gradient(100deg, #7c3aed, #a855f7 40%, #e9d5ff 50%, #a855f7 60%, #6366f1); background-size: 260% 100%; animation: adminShine 3.2s linear infinite; box-shadow: 0 0 12px rgba(168, 85, 247, .6); text-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
 .lb-who .admin-tag, .player-bar .admin-tag { margin-left: 6px; }
 .pp-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 260px; color: var(--muted); font-weight: 600; }
+/* Trainingsmodus */
+.train-toggle { display: flex; align-items: center; gap: 16px; width: 100%; padding: 16px 20px; margin-bottom: 22px; border-radius: 20px; background: var(--card); box-shadow: var(--shadow); text-align: left; color: var(--text); transition: background .3s, box-shadow .3s; }
+.train-toggle.on { background: linear-gradient(120deg, rgba(16, 185, 129, .22), rgba(34, 211, 238, .14)); box-shadow: 0 0 0 1.5px rgba(52, 211, 153, .7), 0 20px 50px -25px rgba(16, 185, 129, .8); }
+.tt-icon { font-size: 34px; }
+.tt-text { flex: 1; display: grid; gap: 2px; }
+.tt-text b { font-size: 18px; }
+.tt-text small { color: var(--muted); font-size: 13px; }
+.tt-switch { width: 54px; height: 30px; border-radius: 99px; background: rgba(255, 255, 255, .12); position: relative; flex: none; transition: background .3s; }
+.tt-switch i { position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .3s cubic-bezier(.3, 1.4, .5, 1); }
+.train-toggle.on .tt-switch { background: #10b981; }
+.train-toggle.on .tt-switch i { transform: translateX(24px); }
+.eval-box { grid-column: 1 / -1; display: grid; gap: 8px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .04); min-height: 58px; }
+.eval-bar { height: 12px; border-radius: 99px; background: #1b1d26; overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.eval-bar i { display: block; height: 100%; background: linear-gradient(90deg, #e9ecf3, #ffffff); transition: width .6s cubic-bezier(.2, .8, .2, 1); }
+.eval-txt { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--muted); }
+.eval-txt b { font-size: 16px; color: var(--text); min-width: 44px; }
+.sq.coach::after { content: ""; position: absolute; inset: 0; background: rgba(52, 211, 153, .45); box-shadow: inset 0 0 0 3px rgba(52, 211, 153, .95); animation: coachPulse 1s ease-in-out infinite alternate; z-index: 0; }
+@keyframes coachPulse { from { opacity: .55; } to { opacity: 1; } }
+/* Hugo – die Legende */
+.bot-card.legend { background: radial-gradient(ellipse at 50% 0%, rgba(192, 132, 252, .25), transparent 60%), var(--card); box-shadow: 0 0 0 1.5px rgba(192, 132, 252, .6), 0 30px 70px -30px rgba(168, 85, 247, .9); }
+.bot-card.legend::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; background: conic-gradient(from var(--a, 0deg), #a855f7, #22d3ee, #f472b6, #a855f7); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: frSpin 4s linear infinite; pointer-events: none; }
+.bot-card.legend h3 { background: linear-gradient(100deg, #c084fc, #fff 45%, #22d3ee 55%, #c084fc); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: adminShine 3s linear infinite; }
+.bot-card .inf { font-size: 18px; color: #e9d5ff; text-shadow: 0 0 10px #a855f7; }

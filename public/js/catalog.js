@@ -2,7 +2,7 @@
 
 export const REWARDS = {
   start: 250,       // Startguthaben
-  win: 100,         // Online-Sieg
+  win: 200,         // Online-Sieg
   draw: 45,         // Online-Remis
   loss: 25,         // Trostgeld bei Niederlage
   botLoss: 5,       // Trostgeld gegen Bots (ab 10 Halbzügen)
@@ -153,7 +153,10 @@ export const BOTS = [
   { id: 4, name: 'Läufer Lena', level: 'Experte', elo: 1200, avatar: '🦊', color: '#ffa657', reward: 110, finisher: 'blitz', cfg: { maxDepth: 3, timeMs: 600, noise: 55, blunder: 0.08, margin: 150 }, quote: 'Diagonalen sind mein Revier.' },
   { id: 5, name: 'Turm Theo', level: 'Meister', elo: 1600, avatar: '🏰', color: '#ff7b72', reward: 200, finisher: 'meteor', cfg: { maxDepth: 4, timeMs: 1000, noise: 25, blunder: 0.03, margin: 80 }, quote: 'Mauern brechen? Viel Glück.' },
   { id: 6, name: 'Dame Diana', level: 'Schlau', elo: 2200, avatar: '👑', color: '#f2cc60', reward: 400, finisher: 'loch', cfg: { maxDepth: 30, timeMs: 2500, noise: 0, blunder: 0 }, quote: 'Ich habe deinen Zug schon gesehen.' },
+  // Hugo: volle Rechenzeit, keine Fehler, kein vorzeitiges Abbrechen – das Stärkste, was die Engine kann
+  { id: 7, name: 'Hugo', level: 'Legende', elo: Infinity, legend: true, avatar: '🧠', color: '#c084fc', reward: 2500, finisher: 'supernova', cfg: { maxDepth: 40, timeMs: 7000, noise: 0, blunder: 0, full: true }, quote: 'Ich habe jede Partie schon gespielt – auch deine.' },
 ];
+export const eloText = (b) => (b.elo === Infinity ? '∞' : String(b.elo));
 
 export const CATALOG = { board: BOARDS, pieces: PIECES, finisher: FINISHERS };
 export const findItem = (kind, id) => (CATALOG[kind] || []).find((x) => x.id === id);

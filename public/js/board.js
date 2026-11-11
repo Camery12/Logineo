@@ -159,6 +159,7 @@ export class Board {
       const sq = d.dataset.sq;
       d.classList.toggle('last', !!this.lastMove && (this.lastMove.from === sq || this.lastMove.to === sq));
       d.classList.toggle('sel', this.selected === sq);
+      d.classList.toggle('coach', !!this.coachHint && (this.coachHint.from === sq || this.coachHint.to === sq));
       d.classList.remove('check');
     }
     if (this.chess.inCheck()) {

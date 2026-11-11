@@ -2,7 +2,7 @@ import { Chess } from '../vendor/chess.js';
 import { createSocket } from './net.js';
 import { Board, miniBoard, applyBoardTheme } from './board.js';
 import { pieceURL } from './pieces.js';
-import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice, PROFILE_OPTIONS, MUSIC_MAX_BYTES } from './catalog.js';
+import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice, PROFILE_OPTIONS, MUSIC_MAX_BYTES, eloText } from './catalog.js';
 import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
 import { profileCardHTML, wireProfileMusic, stopProfileMusic, fmtPlaytime } from './profilecard.js';
@@ -64,7 +64,7 @@ const REASONS = {
 const DECISIONS = { gleich: 'Beide hatten dasselbe Brett', einig: 'Ihr wart euch einig', zufall: 'Per Zufall entschieden', 'einzige Stimme': 'Nur eine Stimme abgegeben' };
 
 // ================================================================ Zustand & Verbindung
-const state = { profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'bundle', botColor: 'random', roomTime: 600000 };
+const state = { profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'bundle', botColor: 'random', roomTime: 600000, training: localStorage.getItem('training') === '1' };
 const socket = window.io ? window.io({ transports: ['websocket', 'polling'] }) : createSocket();
 const emit = (ev, data) => new Promise((res) => socket.emit(ev, data, (r) => res(r || {})));
 
@@ -291,7 +291,7 @@ async function showPlayerProfile(id) {
 
 function showBotProfile(b) {
   const ov = openOverlay(`<div class="pp"><div class="pp-head">${avatar({ type: 'emoji', value: b.avatar, color: 'rgba(255,255,255,.08)' }, 84)}<div><h2>${esc(b.name)} <span class="tag">Bot</span></h2>
-    <div class="muted">${b.level} · „${esc(b.quote)}"</div></div><div class="pp-elo"><b>${b.elo}</b><span>Elo</span></div></div>
+    <div class="muted">${b.level} · „${esc(b.quote)}"</div></div><div class="pp-elo"><b>${eloText(b)}</b><span>Elo</span></div></div>
     <p class="muted">Sieg gegen ${esc(b.name)}: <b style="color:var(--gold)">${b.reward} Münzen</b> · Finisher: ${findItem('finisher', b.finisher)?.icon} ${esc(findItem('finisher', b.finisher)?.name)}</p>
     <div class="modal-actions"><button class="btn primary" data-x>Schließen</button></div></div>`);
   $('[data-x]', ov.el).onclick = ov.close;
@@ -887,7 +887,7 @@ async function throwBoard() {
   board.load(board.fen, board.lastMove, false);
 }
 
-function showResult({ outcome, reason, coins, rating, online, bot }) {
+function showResult({ outcome, reason, coins, rating, online, bot, training = false }) {
   if (reason === 'abandon' && outcome === 'win') {
     // Gegner hat das Spiel verlassen: keine Wertung für den, der bleibt
     sound.notify();
@@ -903,7 +903,7 @@ function showResult({ outcome, reason, coins, rating, online, bot }) {
   const coinLabel = outcome === 'loss' && coins > 0 ? 'Trostgeld' : 'Münzen';
   const ov = openOverlay(`<div class="result-head ${outcome}"><div class="result-icon">${icon}</div><h2>${title}</h2><p class="muted">${REASONS[reason] || ''}</p></div>
     <div class="reward">
-      <span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${coins}</b> ${coinLabel}</span>
+      ${training ? '<span class="pill">🎓 Training – ohne Münzen</span>' : `<span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${coins}</b> ${coinLabel}</span>`}
       ${online ? `<span class="pill" style="color:${rating >= 0 ? 'var(--good)' : 'var(--bad)'}"><b>${rating >= 0 ? '+' : ''}${rating}</b> Elo</span>` : ''}
     </div>
     ${outcome === 'win' && reason === 'checkmate' ? '' : outcome === 'win' ? '<p class="muted" style="text-align:center;font-size:13px;margin-top:16px">Tipp: Gewinne per Schachmatt, um deinen 3D-Finisher zu sehen!</p>' : ''}
@@ -932,23 +932,87 @@ function confirmBox(title, text, okLabel, onOk) {
 // ================================================================ Bots
 function renderBots() {
   const root = $('#view-bots');
-  root.innerHTML = `<div class="section-title"><div><h2>Gegen Bots spielen</h2><p>Sechs Gegner – vom völligen Noob bis zur gnadenlosen Engine. Je stärker der Bot, desto mehr Münzen.</p></div>
+  root.innerHTML = `<button class="train-toggle ${state.training ? 'on' : ''}" id="train-toggle">
+      <span class="tt-icon">🎓</span>
+      <span class="tt-text"><b>Trainingsmodus ${state.training ? 'AN' : 'AUS'}</b>
+        <small>${state.training ? 'Tipps, Stellungsbewertung und Züge zurücknehmen – dafür keine Münzen.' : 'Antippen zum Üben: Tipps vom Bot, Bewertung der Stellung, Züge zurücknehmen.'}</small></span>
+      <span class="tt-switch"><i></i></span>
+    </button>
+    <div class="section-title"><div><h2>Gegen Bots spielen</h2><p>Sieben Gegner – vom völligen Noob bis zu Hugo, der Legende. Je stärker der Bot, desto mehr Münzen.</p></div>
     <div><div class="muted" style="font-size:13px;margin-bottom:6px">Deine Farbe</div><div class="color-pick" id="color-pick">
       <button data-c="w" title="Weiß">♔</button><button data-c="random" title="Zufall">🎲</button><button data-c="b" title="Schwarz">♚</button></div></div></div>
     <div class="bots-grid">${BOTS.map((b, i) => `
-      <div class="card bot-card" style="--bc:${b.color}">
+      <div class="card bot-card ${b.legend ? 'legend' : ''}" style="--bc:${b.color}">
         <div class="bot-top">${avatar({ type: 'emoji', value: b.avatar, color: 'rgba(255,255,255,.08)' }, 64)}
-          <div><h3>${esc(b.name)}</h3><div class="muted" style="font-size:13px">${b.level} · ~${b.elo} Elo</div>
+          <div><h3>${esc(b.name)}</h3><div class="muted" style="font-size:13px">${b.level} · ${b.legend ? '<b class="inf">∞</b>' : `~${b.elo}`} Elo</div>
           <div class="lvl">${BOTS.map((_, j) => `<i class="${j <= i ? 'on' : ''}"></i>`).join('')}</div></div></div>
         <blockquote>„${esc(b.quote)}"</blockquote>
-        <div class="bot-meta"><span>Sieg: <b>${coinHTML(b.reward)}</b></span><span>Finisher: <b>${FINISHERS.find((f) => f.id === b.finisher).icon}</b></span></div>
+        <div class="bot-meta"><span>Sieg: <b>${state.training ? '<span class="muted">Training</span>' : coinHTML(b.reward)}</b></span><span>Finisher: <b>${FINISHERS.find((f) => f.id === b.finisher).icon}</b></span></div>
         <button class="btn primary block" data-bot="${b.id}">Herausfordern</button>
       </div>`).join('')}</div>`;
   const pickColor = () => $$('#color-pick button').forEach((b) => b.classList.toggle('on', b.dataset.c === state.botColor));
   $$('#color-pick button').forEach((b) => b.onclick = () => { state.botColor = b.dataset.c; pickColor(); });
   pickColor();
   $$('[data-bot]', root).forEach((b) => b.onclick = () => startBot(+b.dataset.bot));
+  $('#train-toggle', root).onclick = () => {
+    state.training = !state.training;
+    localStorage.setItem('training', state.training ? '1' : '0');
+    toast(state.training ? '🎓 Trainingsmodus an – üb ganz entspannt!' : 'Trainingsmodus aus – jetzt geht es um Münzen.', state.training ? 'good' : '');
+    renderBots();
+  };
 }
+
+// ---------------------------------------------------------------- Trainer (eigener Worker, damit der Bot nicht warten muss)
+let trainer = null, trainReq = 0;
+function trainerThink(fen, history, timeMs) {
+  if (!trainer) trainer = new Worker(new URL('./engine-worker.js', import.meta.url), { type: 'module' });
+  const id = 'tr' + (++trainReq);
+  return new Promise((resolve) => {
+    const onMsg = (e) => { if (e.data.id === id) { trainer.removeEventListener('message', onMsg); resolve(e.data.move); } };
+    trainer.addEventListener('message', onMsg);
+    trainer.postMessage({ id, fen, history, cfg: { maxDepth: 30, timeMs } });
+  });
+}
+// Bewertung aus Sicht von Weiß (Bauerneinheiten), Matt als ±999
+async function updateEval() {
+  const s = state.bot;
+  if (!s?.training) return;
+  const fen = s.chess.fen(), ply = s.moves.length;
+  let score;
+  if (s.chess.isCheckmate()) score = s.chess.turn() === 'w' ? -100000 : 100000;
+  else if (s.chess.isGameOver()) score = 0;
+  else {
+    const r = await trainerThink(fen, s.fens.slice(-60), 450);
+    if (!r || state.bot !== s || s.moves.length !== ply) return;
+    score = s.chess.turn() === 'w' ? r.score : -r.score;
+  }
+  s.eval = score;
+  renderEval();
+}
+function renderEval() {
+  const s = state.bot, box = $('#eval-box');
+  if (!s || !box || s.eval == null) return;
+  const sc = s.eval, mate = Math.abs(sc) > 90000;
+  const pawns = sc / 100;
+  const white = mate ? (sc > 0 ? 100 : 0) : Math.max(4, Math.min(96, 50 + Math.atan(pawns / 3) * 30));
+  const mine = s.color === 'w' ? sc : -sc;
+  const txt = mate ? (mine > 0 ? 'Du hast ein Matt in der Hand!' : 'Achtung: Matt droht!')
+    : Math.abs(pawns) < 0.4 ? 'Ausgeglichen' : mine > 0 ? (Math.abs(pawns) > 3 ? 'Du stehst klar besser' : 'Du stehst etwas besser') : (Math.abs(pawns) > 3 ? `${esc(s.bot.name)} steht klar besser` : `${esc(s.bot.name)} steht etwas besser`);
+  box.innerHTML = `<div class="eval-bar"><i style="width:${white}%"></i></div>
+    <div class="eval-txt"><b>${mate ? '#' : (pawns > 0 ? '+' : '') + pawns.toFixed(1)}</b><span>${txt}</span></div>`;
+}
+async function showHint() {
+  const s = state.bot;
+  if (!s || s.over || s.thinking || s.chess.turn() !== s.color) return;
+  const btn = $('#hint-btn'); if (btn) { btn.disabled = true; btn.textContent = '💡 Denke nach…'; }
+  const r = await trainerThink(s.chess.fen(), s.fens.slice(-60), 1200);
+  if (state.bot !== s || !r) return;
+  board.coachHint = { from: r.from, to: r.to }; board._highlights();
+  const san = new Chess(s.chess.fen()).move({ from: r.from, to: r.to, promotion: r.promotion || 'q' })?.san;
+  toast(`💡 Tipp: <b>${esc(san || r.from + '-' + r.to)}</b>`, 'good');
+  if (btn) { btn.disabled = false; btn.textContent = '💡 Tipp'; }
+}
+function clearHint() { if (board.coachHint) { board.coachHint = null; board._highlights(); } }
 
 let worker = null, reqId = 0;
 function getWorker() {
@@ -961,7 +1025,8 @@ function startBot(id) {
   const bot = BOTS.find((b) => b.id === id);
   const color = state.botColor === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : state.botColor;
   state.game = null;
-  state.bot = { bot, color, chess: new Chess(), moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId };
+  state.bot = { bot, color, chess: new Chess(), moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId, training: !!state.training, eval: 0 };
+  clearHint();
   const p = state.profile;
   setupBoardLook(p.equipped.board, { w: p.equipped.pieces, b: p.equipped.pieces }, color);
   board.load(state.bot.chess.fen(), null, false);
@@ -972,12 +1037,12 @@ function startBot(id) {
   if (color === 'b') botThink();
 }
 
-function botPlayer(b) { return { name: b.name, avatar: { type: 'emoji', value: b.avatar, color: 'rgba(255,255,255,.08)' }, rating: b.elo, bot: b }; }
+function botPlayer(b) { return { name: b.name, avatar: { type: 'emoji', value: b.avatar, color: 'rgba(255,255,255,.08)' }, rating: eloText(b), bot: b }; }
 
 function renderBotGame() {
   const s = state.bot; if (!s) return;
   const opp = s.color === 'w' ? 'b' : 'w';
-  renderBar($('#bar-top'), botPlayer(s.bot), opp, { thinking: s.thinking, tag: s.bot.level });
+  renderBar($('#bar-top'), botPlayer(s.bot), opp, { thinking: s.thinking, tag: s.training ? '🎓 Training' : s.bot.level });
   renderBar($('#bar-bottom'), state.profile, s.color, { tag: 'Du' });
   const turn = s.chess.turn();
   $('#bar-top').classList.toggle('turn', !s.over && turn === opp);
@@ -986,16 +1051,24 @@ function renderBotGame() {
   if (!s.over) setStatus(turn === s.color ? '🟢 Du bist am Zug' + (s.chess.inCheck() ? ' – <span style="color:var(--bad)">Schach!</span>' : '') : `🤖 ${esc(s.bot.name)} überlegt…`);
   $('#game-actions').innerHTML = s.over
     ? `<button class="btn primary" id="bot-again">🔁 Nochmal</button><button class="btn" data-view="bots">Anderer Bot</button>`
-    : `<button class="btn" id="undo-btn" ${s.moves.length < 2 || s.thinking ? 'disabled' : ''}>↩️ Zurück</button><button class="btn danger" id="bot-resign">🏳️ Aufgeben</button>
-       <button class="btn" id="flip-btn" style="grid-column:1/-1">🔄 Brett drehen</button>`;
+    : s.training
+      ? `<div id="eval-box" class="eval-box"></div>
+         <button class="btn good" id="hint-btn" ${s.thinking || s.chess.turn() !== s.color ? 'disabled' : ''}>💡 Tipp</button><button class="btn" id="undo-btn" ${s.moves.length < 1 || s.thinking ? 'disabled' : ''}>↩️ Zurück</button>
+         <button class="btn danger" id="bot-resign">🏳️ Aufgeben</button><button class="btn" id="flip-btn">🔄 Drehen</button>`
+      : `<button class="btn danger" id="bot-resign">🏳️ Aufgeben</button><button class="btn" id="flip-btn">🔄 Brett drehen</button>`;
+  if (s.training && !s.over) renderEval();
+  const hb = $('#hint-btn'); if (hb) hb.onclick = showHint;
   $('#emotes').hidden = true;
   const again = $('#bot-again'); if (again) again.onclick = () => startBot(s.bot.id);
   const undo = $('#undo-btn'); if (undo) undo.onclick = () => {
     const n = s.chess.turn() === s.color ? 2 : 1;
     for (let i = 0; i < n && s.moves.length; i++) { s.chess.undo(); s.moves.pop(); s.fens.pop(); delete s.marks[s.chess.history().length]; }
     const last = s.chess.history({ verbose: true }).at(-1);
+    clearHint();
     board.load(s.chess.fen(), last ? { from: last.from, to: last.to } : null, true);
     renderBotGame();
+    updateEval();
+    if (s.chess.turn() !== s.color) botThink(); // nur Bot-Zug zurückgenommen (z. B. ganz am Anfang)
   };
   const rs = $('#bot-resign'); if (rs) rs.onclick = () => confirmBox('Aufgeben?', `Gegen ${esc(s.bot.name)} aufgeben?`, 'Aufgeben', () => finishBot(true));
   const fb = $('#flip-btn'); if (fb) fb.onclick = flipBoard;
@@ -1006,8 +1079,10 @@ function botPlayerMove(m) {
   s.fens.push(s.chess.fen());
   const mv = s.chess.move({ from: m.from, to: m.to, promotion: m.promotion });
   s.moves.push({ from: m.from, to: m.to, promotion: m.promotion });
+  clearHint();
   playMoveSound(mv, s.chess.inCheck());
   renderBotGame();
+  updateEval();
   analyzeMove(s, s.chess.history().length - 1, s.fens.at(-1), { from: mv.from, to: mv.to, promotion: mv.promotion }, s.fens.slice(0, -1), null);
   if (!checkBotEnd()) botThink();
 }
@@ -1036,6 +1111,7 @@ async function botThink() {
   board.load(s.chess.fen(), { from: mv.from, to: mv.to }, true);
   playMoveSound(mv, s.chess.inCheck());
   renderBotGame();
+  updateEval();
   analyzeMove(s, s.chess.history().length - 1, s.fens.at(-1), { from: mv.from, to: mv.to, promotion: mv.promotion }, s.fens.slice(0, -1), s.bot.name);
   checkBotEnd();
 }
@@ -1057,7 +1133,8 @@ async function finishBot(resigned) {
   else { outcome = 'draw'; reason = c.isStalemate() ? 'stalemate' : c.isInsufficientMaterial() ? 'insufficient' : c.isThreefoldRepetition() ? 'repetition' : 'fifty'; }
   renderBotGame();
   setStatus(outcome === 'win' ? '🏆 Gewonnen!' : outcome === 'loss' ? '❌ Verloren' : '🤝 Remis');
-  const req = emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned });
+  clearHint();
+  const req = s.training ? Promise.resolve({ coins: 0 }) : emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned });
   if (reason === 'checkmate') {
     await mateFx();
     const { playFinisher } = await import('./finisher.js');
@@ -1070,7 +1147,7 @@ async function finishBot(resigned) {
   if (reason === 'resign') await throwBoard();
   const r = await req;
   if (r?.profile) setProfile(r.profile, { coinsAnim: true });
-  showResult({ outcome, reason, coins: r?.coins ?? 0, bot: s.bot });
+  showResult({ outcome, reason, coins: r?.coins ?? 0, bot: s.bot, training: s.training });
 }
 
 // ================================================================ Shop
