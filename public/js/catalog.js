@@ -54,7 +54,11 @@ export const FINISHERS = [
   { id: 'blitz', name: 'Donnerschlag', price: 600, icon: '⚡', desc: 'Drei Blitze schlagen ein – der König zerfällt.' },
   { id: 'meteor', name: 'Meteoriteneinschlag', price: 750, icon: '☄️', desc: 'Ein glühender Meteor zerschmettert den König.' },
   { id: 'kristall', name: 'Eissplitter', price: 900, icon: '❄️', desc: 'Der König gefriert und zerspringt in tausend Splitter.' },
+  { id: 'glitch', name: 'Datenzerfall', price: 650, icon: '👾', desc: 'Der König glitcht, zerfällt in Pixel und wird gelöscht.' },
+  { id: 'tornado', name: 'Wirbelsturm', price: 850, icon: '🌪️', desc: 'Ein Tornado reißt den König und seine Leibwache in die Luft.' },
+  { id: 'samurai', name: 'Samurai-Schnitt', price: 1000, icon: '⚔️', desc: 'Ein Schwerthieb in Zeitlupe – der König wird zweigeteilt.' },
   { id: 'loch', name: 'Schwarzes Loch', price: 1200, icon: '🌀', desc: 'Ein schwarzes Loch saugt den König ins Nichts.' },
+  { id: 'laser', name: 'Orbital-Laser', price: 1500, icon: '🛰️', desc: 'Zielerfassung aus dem All – ein gigantischer Laserstrahl verdampft den König.' },
 ];
 
 export const BOTS = [

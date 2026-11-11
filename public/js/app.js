@@ -5,6 +5,7 @@ import { pieceURL } from './pieces.js';
 import { BOARDS, PIECES, FINISHERS, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem } from './catalog.js';
 import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
+import { burstAt, shakeBoard, checkFlash, confetti, coinRain } from './fx.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -317,6 +318,7 @@ function flipBoard() {
 
 function setupBoardLook(themeId, skins, orientation) {
   $('.board-col').classList.remove('flipped');
+  $('.board-frame').classList.remove('mated');
   board.setTheme(themeId);
   applyBoardTheme($('.board-frame'), themeId);
   board.setSkins(skins);
@@ -324,9 +326,38 @@ function setupBoardLook(themeId, skins, orientation) {
 }
 
 function playMoveSound(m, inCheck) {
+  const isCap = m?.captured || m?.flags?.includes('c') || m?.flags?.includes('e');
   if (inCheck) sound.check();
-  else if (m?.captured || m?.flags?.includes('c') || m?.flags?.includes('e')) sound.capture();
+  else if (isCap) sound.capture();
   else sound.move();
+  moveFx(m, inCheck, isCap);
+}
+
+// Brett-Effekte nach jedem Zug
+function moveFx(m, inCheck, isCap) {
+  const to = m?.to || m?.lastMove?.to;
+  if (!to) return;
+  const frame = $('.board-frame');
+  setTimeout(() => {
+    const el = board.pieceEls.get(to)?.el;
+    if (el) { el.classList.remove('land'); void el.offsetWidth; el.classList.add('land'); setTimeout(() => el.classList.remove('land'), 350); }
+    if (isCap) { burstAt(board, to, { kind: 'capture', color: board.chess.get(to)?.color === 'w' ? '#3b3b4a' : '#f2f2f2' }); shakeBoard(frame); }
+    else burstAt(board, to, { kind: 'move' });
+    if (m?.promotion || m?.flags?.includes('p')) { burstAt(board, to, { kind: 'promo' }); el?.classList.add('promo-glow'); setTimeout(() => el?.classList.remove('promo-glow'), 1000); }
+    if (inCheck) { const k = board.kingSquare(board.chess.turn()); burstAt(board, k, { kind: 'check' }); checkFlash(frame); shakeBoard(frame); }
+  }, 190);
+}
+
+// Schachmatt auf dem Brett, bevor der 3D-Finisher startet
+async function mateFx() {
+  const frame = $('.board-frame');
+  const k = board.kingSquare(board.chess.turn());
+  await wait(250);
+  burstAt(board, k, { kind: 'mate' });
+  shakeBoard(frame, true);
+  frame.classList.add('mated');
+  sound.boom();
+  await wait(1100);
 }
 
 function captured(fen) {
@@ -498,7 +529,7 @@ socket.on('game:over', async (d) => {
   setStatus(d.outcome === 'win' ? '🏆 Gewonnen!' : d.outcome === 'loss' ? '❌ Verloren' : '🤝 Remis');
   const loserColor = d.result === 'w' ? 'b' : 'w';
   if (d.finisher) {
-    await wait(700);
+    await mateFx();
     const { playFinisher } = await import('./finisher.js');
     await playFinisher({ finisher: d.finisher, fen: d.fen, boardTheme: d.board, skins: d.skins, loserColor, winnerName: d.winnerName });
   }
@@ -523,6 +554,8 @@ function showResult({ outcome, reason, coins, rating, online, bot }) {
       ${online ? '<button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">⚡ Neues Match</button>'
                : '<button class="btn" data-r="bots">Anderer Bot</button><button class="btn primary" data-r="rematch">🔁 Nochmal</button>'}
     </div>`);
+  if (outcome === 'win') confetti();
+  if (coins > 0) setTimeout(() => coinRain($('.reward .coin-pill', ov.el), $('#coin-count').parentElement, Math.min(18, 4 + Math.round(coins / 20)), (i) => { if (i % 3 === 0) sound.coin(); }), 350);
   $$('[data-r]', ov.el).forEach((b) => b.onclick = () => {
     ov.close();
     const r = b.dataset.r;
@@ -667,7 +700,7 @@ async function finishBot(resigned) {
   setStatus(outcome === 'win' ? '🏆 Gewonnen!' : outcome === 'loss' ? '❌ Verloren' : '🤝 Remis');
   const req = emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned });
   if (reason === 'checkmate') {
-    await wait(700);
+    await mateFx();
     const { playFinisher } = await import('./finisher.js');
     const p = state.profile;
     await playFinisher({
@@ -706,7 +739,7 @@ function renderShop() {
     if (tab === 'board') prev.appendChild(miniBoard(it.id, { w: p.equipped.pieces, b: p.equipped.pieces }));
     if (tab === 'pieces') prev.appendChild(miniBoard(p.equipped.board, { w: it.id, b: it.id }, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'));
     if (tab === 'finisher') {
-      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff' };
+      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff' };
       prev.style.padding = '0';
       prev.innerHTML = `<div class="fin-prev" style="--fc:${colors[it.id]}"><span>${it.icon}</span><button class="btn sm">▶ Vorschau</button></div>`;
       $('button', prev).onclick = () => previewFinisher(it.id);

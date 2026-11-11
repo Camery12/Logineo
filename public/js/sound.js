@@ -43,5 +43,11 @@ export const sound = {
   zap() { tone({ freq: 3000, noise: true, dur: 0.35, vol: 0.6 }); tone({ freq: 120, type: 'sawtooth', dur: 0.3, vol: 0.12, slide: -80 }); },
   whoosh() { tone({ freq: 500, noise: true, dur: 0.8, vol: 0.35 }); },
   shatter() { for (let i = 0; i < 6; i++) tone({ freq: 3000 + Math.random() * 3000, noise: true, dur: 0.15, vol: 0.3, delay: i * 0.03 }); },
+  lock() { tone({ freq: 1760, type: 'square', dur: 0.06, vol: 0.05 }); },
+  laser() { tone({ freq: 220, type: 'sawtooth', dur: 1.4, vol: 0.12, slide: 600 }); tone({ freq: 4000, noise: true, dur: 1.4, vol: 0.35 }); tone({ freq: 60, type: 'sine', dur: 1.6, vol: 0.45, slide: -20 }); },
+  wind() { tone({ freq: 300, noise: true, dur: 2.8, vol: 0.4 }); tone({ freq: 700, noise: true, dur: 2.2, vol: 0.2, delay: 0.6 }); },
+  slash() { tone({ freq: 5000, noise: true, dur: 0.18, vol: 0.7 }); tone({ freq: 1800, type: 'sawtooth', dur: 0.14, vol: 0.08, slide: -1500 }); },
+  clink() { tone({ freq: 2637, type: 'triangle', dur: 0.5, vol: 0.12 }); tone({ freq: 3951, type: 'sine', dur: 0.4, vol: 0.06, delay: 0.02 }); },
+  glitch() { for (let i = 0; i < 7; i++) tone({ freq: 200 + Math.random() * 1800, type: 'square', dur: 0.04, vol: 0.05, delay: i * 0.035 }); },
   thud() { tone({ freq: 110, type: 'sine', dur: 0.25, vol: 0.35, slide: -50 }); tone({ freq: 400, noise: true, dur: 0.15, vol: 0.3 }); },
 };
