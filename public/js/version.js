@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.7.1';
+export const VERSION = '1.7.2';
 export const VERSION_DATE = '2026-11-11';
 export const CHANGELOG = [
+  ['1.7.2', 'ADMIN-Abzeichen nicht mehr in der Rangliste (nur noch im Profil)'],
   ['1.7.1', 'Rangliste und Spieler-Leisten zeigen Banner, Rahmen und Namenseffekte, glänzende Admin-Schrift, Seite lädt nach Updates automatisch neu (nie mitten im Spiel), laufende Partien überstehen Updates, Profilsong bis 3 MB'],
   ['1.7.0', 'Profil-Studio: animierte Banner (oder eigenes Bild), Avatar-Rahmen, Namenseffekte, Partikel, Akzentfarbe, Bio, Lieblings-Finisher-Vitrine, Spielzeit sichtbar, Inventar zeigen/verstecken, Profilsong mit Lautstärke-Limit'],
   ['1.6.3', 'Finisher kosten bis zu 2.500 Münzen'],

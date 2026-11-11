@@ -31,7 +31,7 @@ const timeAgo = (t) => {
 // Spieler mit seinem Profil-Look (Mini-Banner, Rahmen, Namenseffekt) – z. B. in der Rangliste
 const styledWho = (u, size, extra = '') => {
   const st = u.style || {};
-  return `<div class="lb-who bn-${st.banner || 'standard'}" style="--acc:${st.accent || '#7c5cff'}"><span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(u.avatar, size)}</span><span class="lb-name nf-${st.nameFx || 'keiner'}" data-text="${esc(u.name)}">${esc(u.name)}</span>${st.admin ? '<span class="admin-tag">ADMIN</span>' : ''}${extra}</div>`;
+  return `<div class="lb-who bn-${st.banner || 'standard'}" style="--acc:${st.accent || '#7c5cff'}"><span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(u.avatar, size)}</span><span class="lb-name nf-${st.nameFx || 'keiner'}" data-text="${esc(u.name)}">${esc(u.name)}</span>${extra}</div>`;
 };
 const avatar = (a, size = 40) => {
   if (!a) return `<span class="avatar" style="--s:${size}px"></span>`;
