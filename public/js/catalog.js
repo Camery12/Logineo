@@ -167,3 +167,19 @@ export function bundlePrice(bundle, owned) {
 
 export const AVATAR_EMOJIS = ['♞', '♛', '♜', '♝', '🦁', '🐺', '🦊', '🐉', '🦅', '🐼', '🐯', '🦄', '🐙', '🐧', '🤖', '👾', '🧙', '🥷', '🦸', '🔥', '⚡', '🌙', '⭐', '💎'];
 export const AVATAR_COLORS = ['#7c5cff', '#22d3ee', '#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444', '#64748b', '#eab308'];
+
+// ---------------------------------------------------------------- Profil-Studio (alles kostenlos anpassbar)
+export const PROFILE_OPTIONS = {
+  banner: [
+    ['standard', 'Standard'], ['aurora', 'Polarlicht'], ['feuer', 'Inferno'], ['galaxie', 'Galaxie'], ['matrix', 'Matrix'],
+    ['gold', 'Goldrausch'], ['ozean', 'Tiefsee'], ['neon', 'Neon-Grid'], ['sakura', 'Kirschblüte'], ['sunset', 'Sonnenuntergang'],
+    ['gewitter', 'Gewitter'], ['bild', 'Eigenes Bild'],
+  ],
+  frame: [['keiner', 'Kein Rahmen'], ['gold', 'Gold'], ['silber', 'Silber'], ['neon', 'Neon'], ['feuer', 'Feuer'], ['eis', 'Eis'], ['regenbogen', 'Regenbogen'], ['diamant', 'Diamant']],
+  nameFx: [['keiner', 'Normal'], ['glanz', 'Glanz'], ['gold', 'Gold'], ['regenbogen', 'Regenbogen'], ['feuer', 'Feuer'], ['eis', 'Eis'], ['glitch', 'Glitch']],
+  particles: [['keine', 'Keine'], ['sterne', 'Sterne'], ['funken', 'Funken'], ['schnee', 'Schnee'], ['blueten', 'Blüten'], ['blasen', 'Blasen'], ['konfetti', 'Konfetti']],
+  accent: ['#7c5cff', '#22d3ee', '#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#eab308', '#ffffff', '#a3e635'],
+};
+export const DEFAULT_CUSTOM = { banner: 'standard', frame: 'keiner', nameFx: 'keiner', particles: 'keine', accent: '#7c5cff', bio: '', showInventory: true, showcase: null, bannerImg: null };
+export const MUSIC_MAX_BYTES = 1_500_000;   // ca. 1,5 MB (≈ 1–1,5 Min. MP3)
+export const MUSIC_MAX_VOLUME = 0.35;       // Lautstärke-Limit für Profilsongs

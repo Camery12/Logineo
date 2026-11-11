@@ -6,8 +6,8 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
-import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS } from './public/js/catalog.js';
-import { checkUsername } from './public/js/censor.js';
+import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
+import { checkUsername, badWord } from './public/js/censor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -20,7 +20,7 @@ const RECONNECT_MS = 45000;
 // Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
 const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-let mongoUsers = null;
+let mongoUsers = null, mongoMusic = null;
 const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
 
 async function loadDb() {
@@ -29,6 +29,8 @@ async function loadDb() {
     const client = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 15000 });
     await client.connect();
     mongoUsers = client.db(process.env.MONGODB_DB || 'schacharena').collection('users');
+    mongoMusic = client.db(process.env.MONGODB_DB || 'schacharena').collection('music');
+    await mongoMusic.createIndex({ id: 1 }, { unique: true });
     await mongoUsers.createIndex({ id: 1 }, { unique: true });
     for (const doc of await mongoUsers.find({}).toArray()) {
       const { _id, ...u } = doc;
@@ -39,6 +41,7 @@ async function loadDb() {
   } else {
     try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch { /* neue DB */ }
     db.users ||= {};
+    db.music ||= {};
     console.log(`⚠️  Keine MONGODB_URI gesetzt – speichere in ${DB_FILE} (geht bei Render-Free bei Updates verloren)`);
   }
 }
@@ -148,16 +151,47 @@ function migrateUsers() {
   save();
 }
 
-const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins } });
+const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins }, style: { frame: customOf(u).frame, nameFx: customOf(u).nameFx } });
 // Admins: per Spielercode (fest, nicht änderbar). Weitere über ADMIN_CODES="code1,code2" bei Render.
 const ADMIN_CODES = new Set(String(process.env.ADMIN_CODES || '58525408').split(',').map((s) => s.trim()).filter(Boolean));
 const isAdmin = (u) => !!u && ADMIN_CODES.has(u.code);
-const priv = (u) => ({ ...pub(u), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30), admin: isAdmin(u) });
+// Profil-Studio: gespeicherte Einstellungen säubern (nur erlaubte Werte)
+const allowed = (k) => PROFILE_OPTIONS[k].map((o) => (Array.isArray(o) ? o[0] : o));
+function customOf(u) {
+  const c = { ...DEFAULT_CUSTOM, ...(u.custom || {}) };
+  for (const k of ['banner', 'frame', 'nameFx', 'particles', 'accent']) if (!allowed(k).includes(c[k])) c[k] = DEFAULT_CUSTOM[k];
+  if (c.showcase && !u.owned.finisher.includes(c.showcase)) c.showcase = null;
+  return c;
+}
+const musicMeta = (u) => (u.music ? { title: u.music.title, volume: u.music.volume, at: u.music.at } : null);
+const priv = (u) => ({ ...pub(u), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30), admin: isAdmin(u), custom: customOf(u), playMs: u.playMs || 0, music: musicMeta(u) });
 // Öffentliches Profil (zum Anklicken in Rangliste / Match)
 const publicProfile = (u) => ({
+  custom: customOf(u), playMs: u.playMs || 0, music: musicMeta(u), inventory: customOf(u).showInventory ? u.owned : null,
   ...pub(u), stats: { ...u.stats }, createdAt: u.createdAt, online: online.has(u.id),
   history: u.history.slice(0, 8).map((h) => ({ type: h.type, opponent: h.opponent, oppAvatar: h.oppAvatar, outcome: h.outcome, reason: h.reason, rating: h.rating, at: h.at })),
 });
+
+// ---------------------------------------------------------------- Profilsongs (eigene Sammlung, damit Profile klein bleiben)
+async function musicGet(id) {
+  if (mongoUsers) { const d = await mongoMusic.findOne({ id }); return d ? d.data : null; }
+  return db.music?.[id] || null;
+}
+async function musicSet(id, data) {
+  if (mongoUsers) await mongoMusic.replaceOne({ id }, { id, data }, { upsert: true });
+  else { db.music[id] = data; save(); }
+}
+async function musicDel(id) {
+  if (mongoUsers) await mongoMusic.deleteOne({ id });
+  else { delete db.music[id]; save(); }
+}
+
+// Spielzeit: jede Minute bekommt jeder, der online ist, eine Minute gutgeschrieben
+setInterval(() => {
+  let changed = false;
+  for (const uid of online.keys()) { const u = db.users[uid]; if (u) { u.playMs = (u.playMs || 0) + 60_000; changed = true; } }
+  if (changed) save();
+}, 60_000);
 
 // ---------------------------------------------------------------- Server
 const app = express();
@@ -168,7 +202,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 400_000 });
+const io = new Server(server, { maxHttpBufferSize: 3_000_000 }); // genug für Profilsongs
 
 const online = new Map();      // userId -> socket
 const games = new Map();       // gameId -> game
@@ -447,6 +481,16 @@ io.on('connection', (socket) => {
     if (!t) return ack?.({ error: 'Kein Spieler mit diesem Code oder Namen gefunden.' });
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) } });
   }));
+  socket.on('admin:clearProfile', need(async ({ query } = {}, ack) => {
+    if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
+    const t = findTarget(query);
+    if (!t) return ack?.({ error: 'Spieler nicht gefunden.' });
+    await musicDel(t.id).catch(() => {});
+    t.music = null; t.custom = { ...customOf(t), bio: '', bannerImg: null, banner: customOf(t).banner === 'bild' ? 'standard' : customOf(t).banner };
+    console.log(`[admin] ${user.name} hat Song/Banner/Bio von ${t.name} (${t.code}) entfernt`);
+    save(); emitTo(t.id, 'profile:refresh', { profile: priv(t) });
+    ack?.({ ok: true });
+  }));
   socket.on('admin:coins', need(({ query, amount } = {}, ack) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
     const t = findTarget(query);
@@ -461,6 +505,54 @@ io.on('connection', (socket) => {
     emitTo(t.id, 'toast', { type: 'good', text: n > 0 ? `🎁 Du hast ${n} Münzen von einem Admin bekommen!` : `Ein Admin hat ${-n} Münzen abgezogen.` });
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) }, profile: t === user ? priv(user) : undefined });
   }));
+
+  // --- Profil-Studio
+  socket.on('profile:custom', need(({ custom } = {}, ack) => {
+    const c = { ...customOf(user) };
+    const inp = custom || {};
+    for (const k of ['banner', 'frame', 'nameFx', 'particles', 'accent']) if (inp[k] !== undefined) { if (!allowed(k).includes(inp[k])) return ack?.({ error: 'Ungültige Auswahl.' }); c[k] = inp[k]; }
+    if (inp.bio !== undefined) {
+      const bio = clean(inp.bio, 80);
+      if (bio && badWord(bio)) return ack?.({ error: 'Deine Bio enthält ein unerlaubtes Wort.' });
+      c.bio = bio;
+    }
+    if (inp.showInventory !== undefined) c.showInventory = !!inp.showInventory;
+    if (inp.showcase !== undefined) { if (inp.showcase && !user.owned.finisher.includes(inp.showcase)) return ack?.({ error: 'Diesen Finisher besitzt du nicht.' }); c.showcase = inp.showcase || null; }
+    if (inp.bannerImg !== undefined) {
+      if (inp.bannerImg === null) c.bannerImg = null;
+      else if (typeof inp.bannerImg === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(inp.bannerImg) && inp.bannerImg.length < 400_000) c.bannerImg = inp.bannerImg;
+      else return ack?.({ error: 'Bannerbild ungültig oder zu groß.' });
+    }
+    user.custom = c; save();
+    ack?.({ profile: priv(user) });
+  }));
+
+  // --- Profilsong hochladen / entfernen / abspielen
+  socket.on('profile:music', need(async ({ data, title, volume, remove } = {}, ack) => {
+    try {
+      if (remove) { await musicDel(user.id); user.music = null; save(); return ack?.({ profile: priv(user) }); }
+      if (data !== undefined) {
+        const ok = typeof data === 'string' && /^data:audio\/(mpeg|mp3|ogg|wav|x-wav|mp4|x-m4a|aac|webm);base64,/.test(data);
+        if (!ok) return ack?.({ error: 'Bitte eine Audiodatei (MP3, OGG, M4A, WAV) hochladen.' });
+        if (data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal ca. 1,5 MB).' });
+        await musicSet(user.id, data);
+        user.music = { title: user.music?.title || 'Profilsong', volume: user.music?.volume ?? 0.6, at: Date.now() };
+      }
+      if (!user.music) return ack?.({ error: 'Lade zuerst einen Song hoch.' });
+      if (title !== undefined) {
+        const t = clean(title, 40);
+        if (t && badWord(t)) return ack?.({ error: 'Der Titel enthält ein unerlaubtes Wort.' });
+        user.music.title = t || 'Profilsong';
+      }
+      if (volume !== undefined) user.music.volume = Math.max(0, Math.min(1, Number(volume) || 0));
+      save();
+      ack?.({ profile: priv(user) });
+    } catch (e) { console.error(e); ack?.({ error: 'Song konnte nicht gespeichert werden.' }); }
+  }));
+  socket.on('music:get', async ({ id } = {}, ack) => {
+    try { const u = db.users[id]; if (!u?.music) return ack?.({ error: 'Kein Song.' }); ack?.({ data: await musicGet(id), title: u.music.title, volume: u.music.volume }); }
+    catch { ack?.({ error: 'Song nicht verfügbar.' }); }
+  });
 
   socket.on('profile:get', ({ id } = {}, ack) => {
     const u = db.users[id];

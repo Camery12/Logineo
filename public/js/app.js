@@ -2,9 +2,10 @@ import { Chess } from '../vendor/chess.js';
 import { createSocket } from './net.js';
 import { Board, miniBoard, applyBoardTheme } from './board.js';
 import { pieceURL } from './pieces.js';
-import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice } from './catalog.js';
+import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice, PROFILE_OPTIONS, MUSIC_MAX_BYTES } from './catalog.js';
 import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
+import { profileCardHTML, wireProfileMusic, stopProfileMusic, fmtPlaytime } from './profilecard.js';
 import { burstAt, shakeBoard, checkFlash, confetti, coinRain, shatterPiece, preloadPieces, tableFlip, resetThrown } from './fx.js';
 
 // ================================================================ Helfer
@@ -40,11 +41,11 @@ function toast(text, type = '') {
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 3200);
 }
 
-function openOverlay(content, { closable = true, wide = false } = {}) {
+function openOverlay(content, { closable = true, wide = false, onClose = null } = {}) {
   const ov = html(`<div class="overlay"><div class="modal ${wide ? 'wide' : ''}"></div></div>`);
   const m = ov.firstElementChild;
   if (typeof content === 'string') m.innerHTML = content; else m.appendChild(content);
-  const close = () => { ov.remove(); };
+  const close = () => { ov.remove(); onClose?.(); };
   if (closable) ov.addEventListener('pointerdown', (e) => { if (e.target === ov) close(); });
   $('#overlay-root').appendChild(ov);
   return { el: m, close, root: ov };
@@ -174,7 +175,13 @@ $('#admin-btn').onclick = () => {
         <span class="pill coin-pill"><i class="coin"></i><b id="adm-coins">${fmtNum(pl.coins)}</b></span></div>
       <div class="adm-quick">${[100, 500, 1000, 5000, 10000].map((n) => `<button class="btn gold sm" data-amt="${n}">+${fmtNum(n)}</button>`).join('')}</div>
       <form id="adm-custom" class="adm-row"><input id="adm-amt" type="number" placeholder="Eigener Betrag (minus zum Abziehen)"><button class="btn primary">Ausführen</button></form>
+      <div class="adm-row"><button class="btn sm" id="adm-view">👁️ Profil ansehen</button><button class="btn sm danger" id="adm-clear">🧹 Song, Banner & Bio entfernen</button></div>
     </div>`;
+    $('#adm-view', ov.el).onclick = () => showPlayerProfile(pl.id);
+    $('#adm-clear', ov.el).onclick = () => confirmBox('Profil säubern?', `Song, eigenes Bannerbild und Bio von @${esc(pl.name)} werden entfernt.`, 'Entfernen', async () => {
+      const r = await emit('admin:clearProfile', { query: pl.code });
+      r.error ? toast(esc(r.error), 'warn') : toast('🧹 Entfernt', 'good');
+    });
     const give = async (amount) => {
       const r = await emit('admin:coins', { query: pl.code, amount });
       if (r.error) return toast(esc(r.error), 'warn');
@@ -199,27 +206,16 @@ async function showPlayerProfile(id) {
   if (!id) return;
   const r = await emit('profile:get', { id });
   if (r.error || !r.profile) return toast(esc(r.error || 'Profil nicht gefunden.'), 'warn');
-  const u = r.profile, s = u.stats;
-  const rate = s.games ? Math.round((s.wins / s.games) * 100) : 0;
-  const it = (k, id2) => findItem(k, id2);
-  const ov = openOverlay(`<div class="pp">
-    <div class="pp-head">${avatar(u.avatar, 84)}<div><h2>${esc(u.name)} ${u.registered ? '<span class="tag">Konto</span>' : '<span class="tag">Gast</span>'}</h2>
-      <div class="muted">${u.online ? '<i class="dot"></i> online' : 'offline'} · Mitglied seit ${new Date(u.createdAt || Date.now()).toLocaleDateString('de-DE')}</div></div>
-      <div class="pp-elo"><b>${u.rating}</b><span>Elo</span></div></div>
-    <div class="stats-grid pp-stats">
-      <div class="stat"><b>${s.games}</b><span>Partien</span></div><div class="stat"><b style="color:var(--good)">${s.wins}</b><span>Siege</span></div>
-      <div class="stat"><b style="color:var(--bad)">${s.losses}</b><span>Niederlagen</span></div><div class="stat"><b>${rate}%</b><span>Siegquote</span></div>
-      <div class="stat"><b>${s.draws}</b><span>Remis</span></div><div class="stat"><b>${s.botWins}</b><span>Bot-Siege</span></div>
-      <div class="stat"><b>${s.mates}</b><span>Schachmatts</span></div><div class="stat"><b>${it('finisher', u.equipped.finisher)?.icon || '♚'}</b><span>${esc(it('finisher', u.equipped.finisher)?.name || '')}</span></div>
-    </div>
-    <div class="pp-prev"></div>
-    <h3 style="margin:18px 0 10px">Letzte Partien</h3>
+  const u = r.profile;
+  const ov = openOverlay(`<div class="pp-wrap">${profileCardHTML(u)}
+    <div class="pc-sec"><h4>🕹️ Letzte Partien</h4>
     <ul class="history">${u.history.length ? u.history.map((h) => `<li>${avatar(h.oppAvatar, 30)}<div><b>${esc(h.opponent)}</b> ${h.type === 'bot' ? '<span class="tag">Bot</span>' : ''}<div class="muted" style="font-size:12px">${REASONS[h.reason] || ''} · ${timeAgo(h.at)}</div></div>
-      <div class="res"><b class="res-${h.outcome}">${h.outcome === 'win' ? 'Sieg' : h.outcome === 'loss' ? 'Niederlage' : 'Remis'}</b>${h.type === 'online' && h.rating ? `<div class="muted">${h.rating > 0 ? '+' : ''}${h.rating} Elo</div>` : ''}</div></li>`).join('') : '<li class="muted">Noch keine Partien.</li>'}</ul>
-    <div class="modal-actions"><button class="btn primary" data-x>Schließen</button></div></div>`, { wide: true });
-  $('.pp-prev', ov.el).append(miniBoard(u.equipped.board, { w: u.equipped.pieces, b: u.equipped.pieces }));
-  $('.pp-prev', ov.el).insertAdjacentHTML('beforeend', `<div class="muted small">🎨 ${esc(it('board', u.equipped.board)?.name || '')}<br>♟️ ${esc(it('pieces', u.equipped.pieces)?.name || '')}</div>`);
+      <div class="res"><b class="res-${h.outcome}">${h.outcome === 'win' ? 'Sieg' : h.outcome === 'loss' ? 'Niederlage' : 'Remis'}</b>${h.type === 'online' && h.rating ? `<div class="muted">${h.rating > 0 ? '+' : ''}${h.rating} Elo</div>` : ''}</div></li>`).join('') : '<li class="muted">Noch keine Partien.</li>'}</ul></div>
+    <p class="muted small" style="text-align:center">Mitglied seit ${new Date(u.createdAt || Date.now()).toLocaleDateString('de-DE')}</p>
+    <div class="modal-actions"><button class="btn primary" data-x>Schließen</button></div></div>`, { wide: true, onClose: stopProfileMusic });
+  ov.el.classList.add('pp-modal');
   $('[data-x]', ov.el).onclick = ov.close;
+  wireProfileMusic(ov.el, emit);
 }
 
 function showBotProfile(b) {
@@ -1099,7 +1095,7 @@ function renderProfile() {
       <div>
         <div class="muted small">Benutzername ${p.registered ? '<span class="tag">Konto</span>' : '<span class="tag">Gast</span>'}</div>
         <div class="name-edit"><span class="at">@</span><input id="name-in" maxlength="16" value="${esc(p.name)}" spellcheck="false" autocomplete="off" /><button class="btn sm primary" id="name-save" hidden>Speichern</button></div>
-        <div class="muted" style="margin-top:6px">Elo <b style="color:var(--text)">${p.rating}</b> · Spielercode <b style="color:var(--text);letter-spacing:.1em">${p.code}</b> <button class="btn sm" id="pc-copy" style="padding:4px 8px">📋</button></div>
+        <div class="muted" style="margin-top:6px">⏱️ ${fmtPlaytime(p.playMs)} gespielt · Elo <b style="color:var(--text)">${p.rating}</b> · Spielercode <b style="color:var(--text);letter-spacing:.1em">${p.code}</b> <button class="btn sm" id="pc-copy" style="padding:4px 8px">📋</button></div>
       </div>
       <div class="equip-row">
         <span class="pill">🎨 ${esc(findItem('board', p.equipped.board)?.name)}</span>
@@ -1144,6 +1140,7 @@ function renderProfile() {
              <p class="muted small" style="margin-top:10px">Schon ein Konto? <button class="linkish" id="acc-login">Anmelden</button></p>`}
       </div>
     </div>`;
+  renderStudio(root, p);
   const pwForm = $('#pw-form');
   pwForm.onsubmit = async (e) => {
     e.preventDefault();
@@ -1178,6 +1175,81 @@ function renderProfile() {
     try { await setAv({ type: 'image', value: await resizeImage(f, 160) }); toast('✅ Profilbild aktualisiert', 'good'); }
     catch { toast('Bild konnte nicht geladen werden.', 'warn'); }
   };
+}
+
+// ================================================================ Profil-Studio
+function renderStudio(root, p) {
+  const c = p.custom || {};
+  const opt = (k, labelFn) => PROFILE_OPTIONS[k].map(([id, label]) => `<button class="st-opt ${c[k] === id ? 'on' : ''}" data-k="${k}" data-v="${id}" title="${esc(label)}">${labelFn(id, label)}</button>`).join('');
+  const box = html(`<section class="card studio">
+    <div class="card-head"><h3>🎬 Profil-Studio</h3><span class="muted small">So sehen andere dein Profil – alles kostenlos</span></div>
+    <div class="studio-grid">
+      <div class="studio-prev">${profileCardHTML({ ...p, online: true }, { own: true })}</div>
+      <div class="studio-ctrl">
+        <h4>Banner</h4><div class="st-row">${opt('banner', (id, l) => `<span class="st-sw bn-${id}"></span><span>${esc(l)}</span>`)}</div>
+        <label class="btn sm st-upload">🖼️ Eigenes Bannerbild hochladen<input type="file" accept="image/*" id="st-banner" hidden></label>
+        <h4>Avatar-Rahmen</h4><div class="st-row">${opt('frame', (id, l) => `<span class="st-fr fr-${id}"><span class="avatar" style="--s:26px;--c:#334">♞</span></span><span>${esc(l)}</span>`)}</div>
+        <h4>Namenseffekt</h4><div class="st-row">${opt('nameFx', (id, l) => `<b class="nf-${id}" data-text="${esc(l)}">${esc(l)}</b>`)}</div>
+        <h4>Partikel</h4><div class="st-row">${opt('particles', (id, l) => esc(l))}</div>
+        <h4>Akzentfarbe</h4><div class="color-grid">${PROFILE_OPTIONS.accent.map((col) => `<button data-k="accent" data-v="${col}" class="${c.accent === col ? 'on' : ''}" style="background:${col}"></button>`).join('')}</div>
+        <h4>Bio</h4><form id="st-bio" class="adm-row"><input name="bio" maxlength="80" value="${esc(c.bio || '')}" placeholder="Ein Satz über dich (max. 80 Zeichen)"><button class="btn primary sm">Speichern</button></form>
+        <h4>Lieblings-Finisher (Vitrine)</h4>
+        <select id="st-showcase" class="st-select"><option value="">– keiner –</option>${p.owned.finisher.map((id) => `<option value="${id}" ${c.showcase === id ? 'selected' : ''}>${findItem('finisher', id)?.icon} ${esc(findItem('finisher', id)?.name)}</option>`).join('')}</select>
+        <h4>Inventar</h4>
+        <label class="st-toggle"><input type="checkbox" id="st-inv" ${c.showInventory !== false ? 'checked' : ''}><span></span> Inventar für andere sichtbar</label>
+        <h4>🎵 Profilsong</h4>
+        <p class="muted small">Spielt leise ab, wenn jemand dein Profil öffnet (Lautstärke begrenzt, Besucher können stummschalten). MP3/OGG/M4A, max. ca. 1,5 MB. Lade nur Musik hoch, die du verwenden darfst.</p>
+        ${p.music ? `<div class="st-song"><b>🎶 ${esc(p.music.title)}</b>
+            <form id="st-mtitle" class="adm-row"><input name="t" maxlength="40" value="${esc(p.music.title)}" placeholder="Songtitel"><button class="btn sm">Titel speichern</button></form>
+            <label class="st-vol">Lautstärke <input type="range" id="st-mvol" min="0" max="100" value="${Math.round((p.music.volume ?? 0.6) * 100)}"></label>
+            <div class="st-row"><label class="btn sm">🔁 Anderen Song<input type="file" accept="audio/*" id="st-music" hidden></label><button class="btn sm danger" id="st-mdel">Song entfernen</button></div></div>`
+          : `<label class="btn primary sm st-upload">⬆️ Song hochladen<input type="file" accept="audio/*" id="st-music" hidden></label>`}
+      </div>
+    </div></section>`);
+  root.appendChild(box);
+  wireProfileMusic(box, emit, { autoplay: false });
+  const keepScroll = async (fn) => { const y = scrollY; await fn(); renderProfile(); scrollTo(0, y); };
+  const save = (custom) => keepScroll(async () => { const r = await emit('profile:custom', { custom }); if (r.error) return toast(esc(r.error), 'warn'); setProfile(r.profile); });
+  $$('[data-k]', box).forEach((b) => b.onclick = () => {
+    if (b.dataset.k === 'banner' && b.dataset.v === 'bild' && !c.bannerImg) { $('#st-banner', box).click(); return; }
+    save({ [b.dataset.k]: b.dataset.v });
+  });
+  $('#st-bio', box).onsubmit = (e) => { e.preventDefault(); save({ bio: e.target.bio.value }); };
+  $('#st-showcase', box).onchange = (e) => save({ showcase: e.target.value || null });
+  $('#st-inv', box).onchange = (e) => save({ showInventory: e.target.checked });
+  $('#st-banner', box).onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { const img = await resizeBanner(f); save({ bannerImg: img, banner: 'bild' }); } catch { toast('Bild konnte nicht geladen werden.', 'warn'); }
+  };
+  const mfile = $('#st-music', box);
+  if (mfile) mfile.onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > MUSIC_MAX_BYTES) return toast(`Der Song ist zu groß (${(f.size / 1e6).toFixed(1)} MB). Maximal ca. 1,5 MB – kürze ihn oder nimm eine niedrigere Qualität.`, 'warn');
+    toast('⏳ Song wird hochgeladen…');
+    const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(f); });
+    const title = f.name.replace(/\.[^.]+$/, '').slice(0, 40);
+    keepScroll(async () => { const r = await emit('profile:music', { data, title }); if (r.error) return toast(esc(r.error), 'warn'); setProfile(r.profile); toast('🎵 Profilsong gespeichert!', 'good'); });
+  };
+  const mt = $('#st-mtitle', box);
+  if (mt) mt.onsubmit = (e) => { e.preventDefault(); keepScroll(async () => { const r = await emit('profile:music', { title: e.target.t.value }); if (r.error) return toast(esc(r.error), 'warn'); setProfile(r.profile); }); };
+  const mv = $('#st-mvol', box);
+  if (mv) mv.onchange = async () => { const r = await emit('profile:music', { volume: mv.value / 100 }); if (r.error) return toast(esc(r.error), 'warn'); setProfile(r.profile); toast('🔊 Lautstärke gespeichert', 'good'); };
+  const md = $('#st-mdel', box);
+  if (md) md.onclick = () => keepScroll(async () => { stopProfileMusic(); const r = await emit('profile:music', { remove: true }); if (r.error) return toast(esc(r.error), 'warn'); setProfile(r.profile); });
+}
+
+function resizeBanner(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const W = 1200, H = 400, c = document.createElement('canvas'); c.width = W; c.height = H;
+      const sc = Math.max(W / img.width, H / img.height), w = img.width * sc, h = img.height * sc;
+      c.getContext('2d').drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL('image/jpeg', 0.78));
+    };
+    img.onerror = reject; img.src = URL.createObjectURL(file);
+  });
 }
 
 function resizeImage(file, size) {
