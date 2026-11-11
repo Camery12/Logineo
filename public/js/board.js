@@ -1,4 +1,4 @@
-import { Chess } from '/vendor/chess.js';
+import { Chess } from '../vendor/chess.js';
 import { pieceURL } from './pieces.js';
 import { BOARDS } from './catalog.js';
 

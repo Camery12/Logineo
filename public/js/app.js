@@ -1,4 +1,5 @@
-import { Chess } from '/vendor/chess.js';
+import { Chess } from '../vendor/chess.js';
+import { createSocket } from './net.js';
 import { Board, miniBoard, applyBoardTheme } from './board.js';
 import { pieceURL } from './pieces.js';
 import { BOARDS, PIECES, FINISHERS, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem } from './catalog.js';
@@ -56,7 +57,7 @@ const DECISIONS = { gleich: 'Beide hatten dasselbe Brett', einig: 'Ihr wart euch
 
 // ================================================================ Zustand & Verbindung
 const state = { profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'board', botColor: 'random', roomTime: 600000 };
-const socket = io({ transports: ['websocket', 'polling'] });
+const socket = window.io ? window.io({ transports: ['websocket', 'polling'] }) : createSocket();
 const emit = (ev, data) => new Promise((res) => socket.emit(ev, data, res));
 
 socket.on('connect', async () => {
@@ -102,7 +103,7 @@ function go(view) {
   state.view = view;
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
   $$('.nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
-  history.replaceState(null, '', `#${view}`);
+  try { history.replaceState(null, '', `#${view}`); } catch { /* egal */ }
   if (view === 'shop') renderShop();
   if (view === 'profile') renderProfile();
   if (view === 'leaderboard') renderLeaderboard();
@@ -167,7 +168,8 @@ function renderPlay() {
 }
 
 function copy(text, msg) {
-  navigator.clipboard?.writeText(text).then(() => toast('✅ ' + msg, 'good'), () => toast(text));
+  try { navigator.clipboard.writeText(text).then(() => toast('✅ ' + msg, 'good'), () => toast(`Code: <b>${esc(text)}</b>`)); }
+  catch { toast(`Code: <b>${esc(text)}</b>`); }
 }
 
 async function joinCode() {
@@ -559,7 +561,7 @@ function renderBots() {
 
 let worker = null, reqId = 0;
 function getWorker() {
-  if (!worker) worker = new Worker('/js/engine-worker.js', { type: 'module' });
+  if (!worker) worker = new Worker(new URL('./engine-worker.js', import.meta.url), { type: 'module' });
   return worker;
 }
 
