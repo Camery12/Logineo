@@ -32,6 +32,7 @@ const FXShader = {
     }`,
 };
 import { BOARDS, PIECES, FINISHERS } from './catalog.js';
+import { boardTexturesSync } from './textures.js';
 import { sound } from './sound.js';
 
 const BOARD3D = { galaxie: ['#5b4aa8', '#1a0c40'], neon: ['#2a2860', '#0e0d26'] };
@@ -289,30 +290,55 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   // Brett
   const theme = BOARDS.find((b) => b.id === boardTheme) || BOARDS[0];
   const [lc, dc] = BOARD3D[theme.id] || [theme.light, theme.dark];
-  // Felder: Textur (Holz/Marmor/Rauschen) + leichter Klarlack, je 3 Varianten gegen Wiederholung
-  const sqMat = (col, seed) => {
-    const m = new THREE.MeshPhysicalMaterial({ map: squareTexture(theme.id, new THREE.Color().setStyle(col).getStyle(), seed), roughness: 0.42, metalness: 0.02, clearcoat: 0.55, clearcoatRoughness: 0.18, envMapIntensity: 0.35 });
-    if (theme.id === 'neon') { m.emissive = new THREE.Color(seed > 3 ? '#14104a' : '#0a0830'); }
+  // Felder: dieselben Texturen wie das 2D-Brett (eine Textur über das ganze Brett, jedes Feld zeigt seinen Ausschnitt)
+  const aniso = renderer.capabilities.getMaxAnisotropy();
+  const themeTex = boardTexturesSync(theme.id);
+  const baseTex = themeTex ? { light: new THREE.CanvasTexture(themeTex.light), dark: new THREE.CanvasTexture(themeTex.dark) } : null;
+  if (baseTex) for (const t of Object.values(baseTex)) { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = aniso; }
+  const physical = (extra) => new THREE.MeshPhysicalMaterial({ roughness: 0.4, metalness: 0.02, clearcoat: 0.55, clearcoatRoughness: 0.18, envMapIntensity: 0.35, ...extra });
+  const plainMat = (col, seed) => {
+    const map = squareTexture('plain', new THREE.Color().setStyle(col).getStyle(), seed); map.anisotropy = aniso;
+    const m = physical({ map });
+    if (theme.id === 'neon') m.emissive = new THREE.Color(seed > 3 ? '#14104a' : '#0a0830');
     return m;
   };
-  const lightMats = [1, 2, 3].map((i) => sqMat(lc, i)), darkMats = [4, 5, 6].map((i) => sqMat(dc, i));
+  const lightMats = baseTex ? null : [1, 2, 3].map((i) => plainMat(lc, i)), darkMats = baseTex ? null : [4, 5, 6].map((i) => plainMat(dc, i));
   const sqGeo = new THREE.BoxGeometry(1, 0.2, 1);
   const squares = [];
   const sqPos = (sq) => new THREE.Vector3(sq.charCodeAt(0) - 97 - 3.5, 0, 3.5 - (+sq[1] - 1));
   for (let f = 0; f < 8; f++) for (let r = 0; r < 8; r++) {
-    const list = (f + r) % 2 ? lightMats : darkMats;
-    const m = new THREE.Mesh(sqGeo, list[(f * 7 + r * 3) % 3]);
+    const isLight = (f + r) % 2;
+    let mat;
+    if (baseTex) {
+      const t = (isLight ? baseTex.light : baseTex.dark).clone();
+      t.repeat.set(1 / 8, 1 / 8); t.offset.set(f / 8, r / 8); t.needsUpdate = true;
+      mat = physical({ map: t });
+    } else mat = (isLight ? lightMats : darkMats)[(f * 7 + r * 3) % 3];
+    const m = new THREE.Mesh(sqGeo, mat);
     m.position.set(f - 3.5, 0, 3.5 - r); m.receiveShadow = true;
     scene.add(m); squares.push(m);
   }
+  if (theme.frost) {
+    // Gletschereis: Frostschicht und kühles Licht
+    const ft = new THREE.CanvasTexture(themeTex.frost); ft.colorSpace = THREE.SRGBColorSpace;
+    const frost = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ map: ft, transparent: true, opacity: 0.35, depthWrite: false }));
+    frost.rotation.x = -Math.PI / 2; frost.position.y = 0.102; scene.add(frost);
+    hemi.color.set('#d8f6ff');
+  }
   // Rahmen mit Goldeinlage
   const frameMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color().setStyle(theme.frame), roughness: 0.35, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.15 });
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(9.1, 0.32, 9.1), frameMat);
-  frame.position.y = -0.06; frame.receiveShadow = true; scene.add(frame);
+  // Rahmen aus 4 Randstücken (darunter ist nichts – so kann das Brett z. B. beim Erdbeben aufreißen)
+  const frameParts = {};
+  for (const [key, w, d, x, z] of [['n', 9.1, 0.55, 0, -4.275], ['s', 9.1, 0.55, 0, 4.275], ['e', 0.55, 8, 4.275, 0], ['w', 0.55, 8, -4.275, 0]]) {
+    const fp = new THREE.Mesh(new THREE.BoxGeometry(w, 0.32, d), frameMat);
+    fp.position.set(x, -0.06, z); fp.receiveShadow = true; fp.castShadow = true; scene.add(fp);
+    frameParts[key] = fp;
+  }
   const goldMat = new THREE.MeshStandardMaterial({ color: '#d4a84a', metalness: 1, roughness: 0.28, envMapIntensity: 1.2 });
-  for (const [w, d, x, z] of [[8.24, 0.06, 0, 4.12], [8.24, 0.06, 0, -4.12], [0.06, 8.24, 4.12, 0], [0.06, 8.24, -4.12, 0]]) {
+  for (const [key, w, d, x, z] of [['s', 8.24, 0.06, 0, 4.12], ['n', 8.24, 0.06, 0, -4.12], ['e', 0.06, 8.24, 4.12, 0], ['w', 0.06, 8.24, -4.12, 0]]) {
     const inlay = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), goldMat);
     inlay.position.set(x, 0.105, z); scene.add(inlay);
+    frameParts[key + 'Gold'] = inlay;
   }
   const floor = new THREE.Mesh(new THREE.CircleGeometry(40, 64), new THREE.MeshStandardMaterial({ color: '#0a0b11', roughness: 0.55, metalness: 0.2, envMapIntensity: 0.15 }));
   floor.rotation.x = -Math.PI / 2; floor.position.y = -0.22; floor.receiveShadow = true; scene.add(floor);
@@ -327,10 +353,14 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
       if (/\d/.test(ch)) { x += +ch; continue; }
       const color = ch === ch.toUpperCase() ? 'w' : 'b', type = ch.toLowerCase();
       const sq = 'abcdefgh'[x] + (8 - y);
-      const g = makePiece(type, mats[color]);
+      // Eigenes Material pro Figur, damit verdeckende Figuren einzeln ausgeblendet werden können
+      const mat = mats[color].clone();
+      const baseOpacity = mat.opacity;
+      mat.transparent = true;
+      const g = makePiece(type, mat);
       g.position.copy(sqPos(sq)).setY(0.1);
       if (type === 'n') g.rotation.y = color === 'w' ? 0 : Math.PI;
-      scene.add(g); pieces.set(sq, { g, type, color });
+      scene.add(g); pieces.set(sq, { g, type, color, mat, baseOpacity, op: 1 });
       if (type === 'k' && color === loserColor) kingSq = sq;
       x++;
     }
@@ -381,7 +411,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
     if (slow) { ctx.timeScale = 0.22; fx.slowRecover = 1; }
     overlay.classList.remove('hit'); void overlay.offsetWidth; overlay.classList.add('hit');
   };
-  const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera };
+  const ctx = { scene, king, kingPos, kingMat, parts, bigParts, debris, shake, flash, fxLight, hemi, key, rim, bg, cam, pieces, squares, loserColor, bloom, timeScale: 1, impact, base, renderer, camera, frameParts, kingSq, sqPos, mats };
   const effect = (EFFECTS[finisher] || EFFECTS.klassisch)(ctx);
   const TOTAL = effect.total || 7.6;
 
@@ -408,6 +438,7 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
 
   const tmp = new THREE.Vector3();
   const perf = { n: 0, sum: 0, done: false };
+  const occDir = new THREE.Vector3(), occP = new THREE.Vector3(), occV = new THREE.Vector3();
   function frameLoop(now) {
     raf = requestAnimationFrame(frameLoop);
     const realDt = Math.min(0.1, (now - last) / 1000); last = now;
@@ -455,6 +486,23 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
       camera.position.y += a * (Math.sin(s * 25 + 2.1) * 0.6 + Math.sin(s * 39 + 0.4) * 0.4);
     }
     camera.lookAt(tmp);
+    // Figuren, die zwischen Kamera und König stehen (oder direkt vor der Linse), weich ausblenden
+    if (p > 0.5) {
+      occDir.subVectors(tmp, camera.position);
+      const len2 = occDir.lengthSq();
+      for (const pc of pieces.values()) {
+        if (pc.g === king || !pc.mat) continue;
+        occP.copy(pc.g.position); occP.y += 0.5;
+        occV.subVectors(occP, camera.position);
+        const tt = Math.max(0, Math.min(1, occV.dot(occDir) / len2));
+        const d = occV.addScaledVector(occDir, -tt).length();
+        const occluding = (tt > 0.03 && tt < 0.9 && d < 0.55) || occP.distanceTo(camera.position) < 1.25;
+        pc.op += ((occluding ? 0.12 : 1) - pc.op) * (1 - Math.exp(-realDt * 10));
+        pc.mat.opacity = pc.op * pc.baseOpacity;
+        pc.mat.depthWrite = pc.op > 0.6;
+        pc.g.traverse((o) => { if (o.isMesh) o.castShadow = pc.op > 0.6; });
+      }
+    }
     composer.render();
   }
   raf = requestAnimationFrame(frameLoop);
@@ -1024,6 +1072,213 @@ Object.assign(EFFECTS, {
           });
           inst.instanceMatrix.needsUpdate = true;
           mat.emissiveIntensity = 1.6 + Math.sin(t * 40) * 0.6;
+        }
+      },
+    };
+  },
+});
+
+// ------------------------------------------------------------ Neue Finisher (v1.5)
+// Blitz aus kleinen Zylindern (leuchtet durch Bloom)
+function makeBoltMesh(scene, from, to, mat, segs = 12, w = 0.04) {
+  const g = new THREE.Group();
+  let prev = from.clone();
+  for (let i = 1; i <= segs; i++) {
+    const p = from.clone().lerp(to, i / segs);
+    if (i < segs) { p.x += rand(-0.35, 0.35); p.z += rand(-0.35, 0.35); p.y += rand(-0.15, 0.15); }
+    const len = prev.distanceTo(p);
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(w, w, len, 5), mat);
+    c.position.copy(prev).lerp(p, 0.5);
+    c.quaternion.setFromUnitVectors(V(0, 1, 0), p.clone().sub(prev).normalize());
+    g.add(c); prev = p;
+  }
+  scene.add(g);
+  return g;
+}
+
+Object.assign(EFFECTS, {
+  // 💣 Kanonenschuss: Kanone rollt heran, feuert, der König fliegt in hohem Bogen vom Brett
+  kanone(ctx) {
+    const { scene, king, kingPos, parts, bigParts, debris, cam } = ctx;
+    const side = kingPos.x > 0 ? -1 : 1;
+    const base = V(kingPos.x + side * 6.2, 0.1, kingPos.z + 1.2);
+    const aim = kingPos.clone().sub(base).setY(0).normalize();
+    const metal = new THREE.MeshStandardMaterial({ color: '#2b2d33', metalness: 0.85, roughness: 0.35 });
+    const wood = new THREE.MeshStandardMaterial({ color: '#5a3517', roughness: 0.8 });
+    const cannon = new THREE.Group();
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 1.5, 24), metal);
+    barrel.rotation.z = -Math.PI / 2 + 0.28; barrel.position.set(0.2, 0.62, 0); barrel.castShadow = true;
+    const carriage = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.25, 0.6), wood); carriage.position.y = 0.32; carriage.castShadow = true;
+    cannon.add(barrel, carriage);
+    for (const z of [-0.36, 0.36]) { const wh = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.07, 10, 24), wood); wh.position.set(-0.1, 0.27, z); cannon.add(wh); }
+    cannon.position.copy(base).addScaledVector(aim, -4);
+    cannon.rotation.y = Math.atan2(-aim.z, aim.x);
+    scene.add(cannon);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.15, 20, 14), metal); ball.castShadow = true; ball.visible = false; scene.add(ball);
+    const muzzle = () => cannon.localToWorld(V(0.95, 0.85, 0));
+    let fired = false, hit = false, roll = false;
+    const smoke = (pos, n, sp) => { for (let i = 0; i < n; i++) bigParts.spawn(pos, V(rand(-sp, sp), rand(0.2, sp), rand(-sp, sp)), C('#8c8c8c').multiplyScalar(0.25), rand(0.8, 1.6), -0.3, 1.2); };
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 6.2; cam.heightEnd = 2.6; cam.orbit = 0.05;
+        // Heranrollen
+        const r = ease.out(seg(t, 1.7, 2.5));
+        cannon.position.copy(base).addScaledVector(aim, -4 * (1 - r));
+        cannon.children.slice(2).forEach((w) => { w.rotation.z -= dt * 6 * (1 - r); });
+        if (t > 2.5 && !roll) { roll = true; sound.thud(); }
+        if (t >= 2.7 && !fired) {
+          fired = true; sound.boom(); ctx.impact(0.5, { slow: false });
+          const m = muzzle();
+          ctx.fxLight.position.copy(m); ctx.fxLight.color.set('#ffb347'); ctx.fxLight.intensity = 90;
+          for (let i = 0; i < 120; i++) parts.spawn(m, aim.clone().multiplyScalar(rand(2, 7)).add(V(rand(-1, 1), rand(-0.3, 1.2), rand(-1, 1))), C(i % 3 ? '#ffb347' : '#fff2c4').multiplyScalar(1.5), rand(0.2, 0.6), 2, 2);
+          smoke(m, 40, 1.2);
+          ball.visible = true;
+        }
+        if (fired) {
+          // Rückstoß
+          const k = seg(t, 2.7, 3.2);
+          cannon.position.copy(base).addScaledVector(aim, -0.5 * Math.sin(Math.min(1, k * 2) * Math.PI) * (1 - k));
+          ctx.fxLight.intensity *= 0.88;
+        }
+        if (fired && !hit) {
+          const k = seg(t, 2.7, 3.15);
+          const from = muzzle(), to = kingPos.clone().setY(0.75);
+          ball.position.lerpVectors(from, to, k); ball.position.y += Math.sin(k * Math.PI) * 0.9;
+          for (let i = 0; i < 3; i++) bigParts.spawn(ball.position, V(rand(-0.2, 0.2), rand(0, 0.4), rand(-0.2, 0.2)), C('#9a9a9a').multiplyScalar(0.2), rand(0.5, 1));
+          if (k >= 1) {
+            hit = true; sound.boom(); sound.thud(); ctx.impact(1.3);
+            debris.items.push({ m: king, v: aim.clone().multiplyScalar(7.5).add(V(0, 6.5, 0)), w: V(rand(-6, 6), rand(-4, 4), rand(-12, -8)), r: 0.05 });
+            debris.items.push({ m: ball, v: aim.clone().multiplyScalar(2.5).add(V(0, 1.5, 0)), w: V(0, 0, -5), r: 0.15 });
+            debris.burst(kingPos, new THREE.MeshStandardMaterial({ color: '#c99a5b', roughness: 0.9 }), 26, { speed: 4, up: 4, size: [0.03, 0.1] });
+            for (let i = 0; i < 260; i++) parts.spawn(V(kingPos.x, 0.7, kingPos.z), V(rand(-1, 1), rand(0, 1), rand(-1, 1)).normalize().multiplyScalar(rand(2, 7)).addScaledVector(aim, 2), C(i % 2 ? '#ffb347' : '#ffffff').multiplyScalar(1.4), rand(0.3, 1), 5, 1);
+            smoke(V(kingPos.x, 0.6, kingPos.z), 50, 1.5);
+          }
+        }
+        // Kamera folgt dem fliegenden König
+        if (hit) cam.look.lerp(V(king.position.x, Math.max(0.6, king.position.y), king.position.z), 1 - Math.exp(-dt * 3));
+        if (hit && king.position.y > 0.4) bigParts.spawn(king.position, V(0, 0.2, 0), C('#9a9a9a').multiplyScalar(0.18), 0.8);
+      },
+    };
+  },
+
+  // 🌋 Erdbeben: das Brett reißt entlang der Königsreihe auf, Magma glüht, der König stürzt hinein
+  erdbeben(ctx) {
+    const { scene, king, kingPos, parts, bigParts, squares, pieces, frameParts, cam } = ctx;
+    const kz = kingPos.z;
+    const lavaMat = new THREE.MeshBasicMaterial({ color: C('#ff5a1a').multiplyScalar(1.6), transparent: true, opacity: 0 });
+    const lava = new THREE.Mesh(new THREE.PlaneGeometry(12, 3), lavaMat);
+    lava.rotation.x = -Math.PI / 2; lava.position.set(0, -0.2, kz); scene.add(lava);
+    const glow = new THREE.PointLight('#ff5a1a', 0, 9, 1.5); glow.position.set(kingPos.x, -0.1, kz); scene.add(glow);
+    const groupOf = (z) => (Math.abs(z - kz) < 0.1 ? 'row' : z < kz ? 'n' : 's');
+    const sq = squares.map((m) => ({ m, g: groupOf(m.position.z), o: m.position.clone(), rx: rand(-1, 1), rz: rand(-1, 1), delay: rand(0, 0.5) }));
+    const pcs = [...pieces.values()].map((p) => ({ p, g: groupOf(p.g.position.z), o: p.g.position.clone(), delay: rand(0.1, 0.6) }));
+    const fparts = Object.entries(frameParts).map(([k, m]) => ({ m, g: k.startsWith('n') ? 'n' : k.startsWith('s') ? 's' : null, o: m.position.clone() }));
+    let cracked = false, erupt = false, rum = 0;
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 6; cam.heightEnd = 3.4; cam.orbit = 0.05;
+        // Grollen
+        if (t > 1.8 && t < 5.4) {
+          ctx.shake(0.05 + seg(t, 1.8, 2.7) * 0.06, 0.25);
+          if (t - rum > 0.45) { rum = t; sound.thud(); }
+          if (Math.random() < 0.5) bigParts.spawn(V(rand(-4, 4), 0.15, rand(-4, 4)), V(0, rand(0.2, 0.6), 0), C('#a08a70').multiplyScalar(0.2), rand(0.8, 1.4));
+        }
+        if (t > 1.8 && t < 2.7) for (const s of sq) s.m.position.y = s.o.y + Math.sin(t * 40 + s.o.x * 3 + s.o.z * 2) * 0.012;
+        if (t >= 2.7 && !cracked) { cracked = true; ctx.impact(1.1); sound.boom(); }
+        if (cracked) {
+          const gap = ease.out(seg(t, 2.7, 3.5)) * 1.05;
+          lavaMat.opacity = Math.min(1, lavaMat.opacity + dt * 2);
+          glow.intensity = 25 + Math.sin(t * 9) * 6;
+          for (const s of sq) {
+            if (s.g === 'n') s.m.position.set(s.o.x, s.o.y, s.o.z - gap);
+            else if (s.g === 's') s.m.position.set(s.o.x, s.o.y, s.o.z + gap);
+            else {
+              const k = Math.max(0, t - 2.85 - s.delay);
+              s.m.position.set(s.o.x, s.o.y - 4.9 * k * k, s.o.z);
+              s.m.rotation.x = s.rx * k * 2; s.m.rotation.z = s.rz * k * 2;
+            }
+          }
+          for (const f of fparts) { if (f.g === 'n') f.m.position.z = f.o.z - gap; if (f.g === 's') f.m.position.z = f.o.z + gap; }
+          for (const q of pcs) {
+            if (q.p.g === king) continue;
+            if (q.g === 'n') q.p.g.position.z = q.o.z - gap;
+            else if (q.g === 's') q.p.g.position.z = q.o.z + gap;
+            else { const k = Math.max(0, t - 3 - q.delay); q.p.g.position.y = q.o.y - 4.9 * k * k; q.p.g.rotation.z += dt * 2 * Math.min(1, k * 3); }
+          }
+          // König kippt und stürzt in die Spalte
+          const k = Math.max(0, t - 3.15);
+          king.rotation.x = Math.min(1.4, k * 2.2); king.rotation.z = Math.sin(k * 4) * 0.4 * Math.min(1, k);
+          king.position.y = kingPos.y - 4.9 * k * k * 0.8;
+          if (Math.random() < 0.9) for (let i = 0; i < 4; i++) parts.spawn(V(rand(-4.3, 4.3), -0.15, kz + rand(-0.4, 0.4)), V(rand(-0.3, 0.3), rand(1, 3.5), rand(-0.3, 0.3)), C(i % 2 ? '#ff7a1a' : '#ffd27a').multiplyScalar(1.4), rand(0.5, 1.4), 1);
+        }
+        if (t >= 4.3 && !erupt) {
+          erupt = true; ctx.impact(0.8, { slow: false }); sound.boom();
+          for (let i = 0; i < 500; i++) parts.spawn(V(kingPos.x + rand(-0.4, 0.4), -0.1, kz), V(rand(-1.5, 1.5), rand(4, 10), rand(-1.5, 1.5)), C(i % 3 ? '#ff5a1a' : '#ffe08a').multiplyScalar(1.6), rand(1, 2.2), 6);
+          for (let i = 0; i < 40; i++) bigParts.spawn(V(kingPos.x, 0.2, kz), V(rand(-1, 1), rand(2, 5), rand(-1, 1)), C('#ff5a1a').multiplyScalar(0.5), rand(0.6, 1.2), 3);
+        }
+        if (erupt) cam.lookY = Math.min(1.4, cam.lookY + dt * 1.2);
+      },
+    };
+  },
+
+  // 🔨 Donnerhammer: Blitzhammer kracht vom Himmel und macht den König platt, Schockwelle durchs Brett
+  hammer(ctx) {
+    const { scene, king, kingPos, parts, bigParts, squares, pieces, cam } = ctx;
+    const steel = new THREE.MeshStandardMaterial({ color: '#b9c2cc', metalness: 1, roughness: 0.22, emissive: C('#3ab4ff'), emissiveIntensity: 0.15 });
+    const leather = new THREE.MeshStandardMaterial({ color: '#4a2a14', roughness: 0.85 });
+    const hammer = new THREE.Group();
+    const head = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.85, 0.85), steel); head.castShadow = true;
+    const rune = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.12, 0.87), new THREE.MeshBasicMaterial({ color: C('#7fd4ff').multiplyScalar(3) }));
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 1.9, 16), leather); handle.position.y = 1.35; handle.castShadow = true;
+    hammer.add(head, rune, handle);
+    hammer.position.set(kingPos.x, 13, kingPos.z); hammer.rotation.z = 0.6; scene.add(hammer);
+    const boltMat = new THREE.MeshBasicMaterial({ color: C('#cfeeff').multiplyScalar(2.2) });
+    let arcs = [], slammed = false, bolts = null, boltT = 0, t0 = 0;
+    const sq = squares.map((m) => ({ m, o: m.position.clone(), d: Math.hypot(m.position.x - kingPos.x, m.position.z - kingPos.z) }));
+    const near = [...pieces.values()].filter((p) => p.g !== king).map((p) => ({ p, o: p.g.position.clone(), d: Math.hypot(p.g.position.x - kingPos.x, p.g.position.z - kingPos.z), tilt: rand(-0.5, 0.5) }));
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1, 72), new THREE.MeshBasicMaterial({ color: C('#9fe3ff').multiplyScalar(3), transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(kingPos.x, 0.14, kingPos.z); scene.add(ring);
+    return {
+      total: 8,
+      update(t, dt) {
+        cam.distEnd = 6; cam.heightEnd = 2.8; cam.orbit = 0.05;
+        const d = seg(t, 1.8, 2.4);
+        ctx.hemi.intensity = 0.55 - d * 0.35; ctx.bg.copy(C('#07080d').lerp(C('#03040a'), d));
+        // Abstieg mit knisternden Blitzen
+        if (!slammed) {
+          const slow = ease.inOut(seg(t, 1.8, 2.9)), fast = ease.in(seg(t, 2.9, 3.05));
+          const yTop = 13 - slow * 8.5;
+          hammer.position.y = THREE.MathUtils.lerp(yTop, kingPos.y + 1.0 + 0.42, fast);
+          hammer.rotation.z = 0.6 * (1 - slow) + Math.sin(t * 3) * 0.05 * (1 - fast);
+          cam.lookY = Math.max(0, (hammer.position.y - 2) * 0.25);
+          arcs.forEach((a) => scene.remove(a)); arcs = [];
+          if (t > 1.9 && Math.random() < 0.6) arcs.push(makeBoltMesh(scene, hammer.position.clone().add(V(rand(-0.7, 0.7), rand(-0.4, 0.4), rand(-0.4, 0.4))), hammer.position.clone().add(V(rand(-1.4, 1.4), rand(-1.2, 1.2), rand(-1.2, 1.2))), boltMat, 5, 0.018));
+          if (t > 2.9 && fast >= 1) {
+            slammed = true; t0 = t; sound.zap(); sound.boom(); sound.thud(); ctx.impact(1.6);
+            arcs.forEach((a) => scene.remove(a)); arcs = [];
+            king.scale.set(1.7, 0.09, 1.7);
+            bolts = [0, 1, 2, 3, 4].map((i) => { const a = (i / 5) * Math.PI * 2; return makeBoltMesh(scene, V(kingPos.x, 1.4, kingPos.z), V(kingPos.x + Math.cos(a) * 3.5, 0.15, kingPos.z + Math.sin(a) * 3.5), boltMat, 10, 0.04); });
+            boltT = 0.35;
+            ctx.fxLight.position.set(kingPos.x, 1.5, kingPos.z); ctx.fxLight.color.set('#9fd4ff'); ctx.fxLight.intensity = 70;
+            for (let i = 0; i < 500; i++) { const a = Math.random() * 6.28; parts.spawn(V(kingPos.x, 0.2, kingPos.z), V(Math.cos(a) * rand(3, 10), rand(0.5, 4), Math.sin(a) * rand(3, 10)), C(i % 2 ? '#bfe6ff' : '#ffffff').multiplyScalar(1.5), rand(0.3, 1), 5, 1); }
+            for (let i = 0; i < 50; i++) bigParts.spawn(V(kingPos.x, 0.3, kingPos.z), V(rand(-3, 3), rand(0.2, 1.5), rand(-3, 3)), C('#9a9a9a').multiplyScalar(0.25), rand(0.8, 1.6));
+            ring.material.opacity = 1;
+          }
+        } else {
+          const k = t - t0;
+          // Schockwelle läuft durchs Brett
+          for (const s of sq) { const w = k * 9 - s.d; s.m.position.y = s.o.y + (w > 0 && w < 3.2 ? Math.sin(w * 2) * 0.22 * Math.exp(-k * 1.4) : 0); }
+          for (const n of near) { const w = k * 9 - n.d; const lift = w > 0 && w < 3.2 ? Math.sin(w * 2) * 0.35 * Math.exp(-k * 1.4) : 0; n.p.g.position.y = n.o.y + Math.max(0, lift); n.p.g.rotation.z = n.tilt * Math.max(0, lift); }
+          ring.scale.setScalar(1 + k * 9); ring.material.opacity = Math.max(0, 1 - k * 1.1);
+          if (bolts) { boltT -= dt; bolts.forEach((b) => { b.visible = Math.random() > 0.3; }); if (boltT <= 0) { bolts.forEach((b) => scene.remove(b)); bolts = null; } }
+          ctx.fxLight.intensity *= 0.92;
+          king.scale.y = 0.09 + Math.max(0, Math.sin(k * 14) * 0.03 * Math.exp(-k * 5));
+          // Hammer hebt wieder ab und fliegt davon
+          const up = ease.in(seg(t, t0 + 0.9, t0 + 2.2));
+          hammer.position.y = kingPos.y + 1.42 + up * 16; hammer.rotation.y += dt * 8 * up;
+          if (Math.random() < 0.5) parts.spawn(V(kingPos.x + rand(-0.6, 0.6), 0.15, kingPos.z + rand(-0.6, 0.6)), V(0, rand(0.5, 1.5), 0), C('#9fe3ff').multiplyScalar(1.3), rand(0.3, 0.7));
         }
       },
     };

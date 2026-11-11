@@ -35,12 +35,23 @@ export function pieceSVG(type, color, skinId) {
   const gid = `g${color}`;
   const glow = c.glow ? `<filter id="gl" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.1" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` : '';
   const shadow = `<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="1.2" stdDeviation=".9" flood-color="#000" flood-opacity=".38"/></filter>`;
+  // Marmor-/Harz-Wirbel: Turbulenz-Rauschen, nur an den Graten sichtbar, auf die Figur zugeschnitten
+  let swirlDef = '', swirlLayer = '';
+  if (c.swirl) {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(c.swirl.slice(i, i + 2), 16) / 255);
+    const seed = 'pnbrqk'.indexOf(type) * 7 + (color === 'w' ? 3 : 11);
+    swirlDef = `<filter id="sw" x="0" y="0" width="100%" height="100%" filterUnits="userSpaceOnUse"><feTurbulence type="turbulence" baseFrequency="0.07 0.16" numOctaves="3" seed="${seed}" result="t"/>
+      <feColorMatrix in="t" type="matrix" values="0 0 0 0 ${r.toFixed(3)} 0 0 0 0 ${g.toFixed(3)} 0 0 0 0 ${b.toFixed(3)} -7 0 0 0 1.45" result="v"/>
+      <feComposite in="v" in2="SourceAlpha" operator="in"/></filter>`;
+    swirlLayer = `<g filter="url(#sw)" opacity="${c.glow ? 1 : 0.9}">${SHAPES[type].replace(/class="F"/g, 'fill="#000"').replace(/class="[DE]"[^/]*\/>/g, '/>')}</g>`;
+  }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><defs>
     <linearGradient id="${gid}" x1="0" y1="0" x2=".35" y2="1"><stop offset="0" stop-color="${c.fill[0]}"/><stop offset="1" stop-color="${c.fill[1]}"/></linearGradient>
     <linearGradient id="hl" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity=".0"/><stop offset=".3" stop-color="#fff" stop-opacity=".28"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/></linearGradient>
-    ${shadow}${glow}</defs>
+    ${shadow}${glow}${swirlDef}</defs>
     <style>.F{fill:url(#${gid});stroke:${c.stroke};stroke-width:1.35;stroke-linejoin:round}.D{stroke:${c.detail};stroke-width:1.2;stroke-linecap:round}.E{fill:${c.detail}}</style>
     <g filter="url(#${c.glow ? 'gl' : 'sh'})">${SHAPES[type]}</g>
+    ${swirlLayer}
     <g style="mix-blend-mode:screen" opacity=".9">${SHAPES[type].replace(/class="F"/g, 'fill="url(#hl)" stroke="none"').replace(/class="[DE]"[^/]*\/>/g, '/>')}</g>
   </svg>`;
 }

@@ -1,6 +1,7 @@
 import { Chess } from '../vendor/chess.js';
 import { pieceURL } from './pieces.js';
 import { BOARDS } from './catalog.js';
+import { boardTextures } from './textures.js';
 
 const FILES = 'abcdefgh';
 
@@ -12,8 +13,19 @@ export function applyBoardTheme(el, id) {
   el.style.setProperty('--last', t.last);
   el.style.setProperty('--overlay', t.overlay || 'none');
   el.style.setProperty('--grid', t.grid || 'transparent');
+  el.style.setProperty('--lightTex', 'none');
+  el.style.setProperty('--darkTex', 'none');
+  el.style.setProperty('--frost', 'none');
   el.classList.toggle('stars', !!t.stars);
+  el.classList.toggle('frosty', !!t.frost);
   el.dataset.theme = t.id;
+  // Texturen werden im Hintergrund erzeugt und dann eingesetzt
+  boardTextures(t.id, (res) => {
+    if (!res || el.dataset.theme !== t.id) return;
+    el.style.setProperty('--lightTex', `url(${res.urls.light})`);
+    el.style.setProperty('--darkTex', `url(${res.urls.dark})`);
+    if (res.urls.frost) el.style.setProperty('--frost', `url(${res.urls.frost})`);
+  });
 }
 
 export class Board {
@@ -61,6 +73,7 @@ export class Board {
       const sq = this._sqAt(x, y), d = cells[y * 8 + x];
       d.className = 'sq ' + ((x + y) % 2 ? 'dark' : 'light');
       d.dataset.sq = sq;
+      d.style.backgroundPosition = `${(x / 7) * 100}% ${(y / 7) * 100}%`; // Ausschnitt der Brett-Textur
     }
     let html = '';
     for (let i = 0; i < 8; i++) {
@@ -281,9 +294,10 @@ export function miniBoard(themeId, skins = { w: 'klassisch', b: 'klassisch' }, f
   rows.forEach((row, y) => {
     let x = 0;
     for (const ch of row) {
-      if (/\d/.test(ch)) { for (let i = 0; i < +ch; i++, x++) html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}"></i>`; continue; }
+      const bp = () => `--bp:${(x / 7) * 100}% ${(y / 7) * 100}%`;
+      if (/\d/.test(ch)) { for (let i = 0; i < +ch; i++, x++) html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}" style="${bp()}"></i>`; continue; }
       const color = ch === ch.toUpperCase() ? 'w' : 'b';
-      html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}" style="--p:${pieceURL(ch.toLowerCase(), color, skins[color]).replace(/"/g, '&quot;')}"></i>`;
+      html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}" style="${bp()};--p:${pieceURL(ch.toLowerCase(), color, skins[color]).replace(/"/g, '&quot;')}"></i>`;
       x++;
     }
   });

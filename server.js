@@ -6,7 +6,8 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { Chess } from 'chess.js';
-import { REWARDS, BOTS, findItem, AVATAR_EMOJIS, AVATAR_COLORS } from './public/js/catalog.js';
+import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS } from './public/js/catalog.js';
+import { checkUsername } from './public/js/censor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -89,8 +90,30 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 const byToken = new Map();
 const byCode = new Map();
 
+const byName = new Map(); // benutzername (klein) -> user
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const digits = (n) => Array.from({ length: n }, (_, i) => (i === 0 ? 1 + crypto.randomInt(9) : crypto.randomInt(10))).join('');
+const nameKey = (n) => String(n || '').trim().toLowerCase();
+function freeGuestName() {
+  let n; do n = 'Spieler' + (1000 + crypto.randomInt(90000)); while (byName.has(nameKey(n)));
+  return n;
+}
+function setName(u, n) {
+  if (byName.get(nameKey(u.name)) === u) byName.delete(nameKey(u.name));
+  u.name = n; byName.set(nameKey(n), u);
+}
+
+// Passwörter: scrypt mit Salt, nie im Klartext gespeichert
+function hashPw(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `${salt}:${crypto.scryptSync(pw, salt, 64).toString('hex')}`;
+}
+function checkPw(pw, stored) {
+  if (!stored) return false;
+  const [salt, h] = stored.split(':');
+  const a = Buffer.from(h, 'hex'), b = crypto.scryptSync(String(pw), salt, 64);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 function createUser() {
   let code; do code = digits(8); while (byCode.has(code));
@@ -98,23 +121,40 @@ function createUser() {
     id: crypto.randomUUID(),
     token: crypto.randomBytes(24).toString('hex'),
     code,
-    name: 'Spieler' + (1000 + crypto.randomInt(9000)),
+    name: freeGuestName(),
     avatar: { type: 'emoji', value: pick(AVATAR_EMOJIS), color: pick(AVATAR_COLORS) },
     coins: REWARDS.start,
-    rating: 1200,
+    rating: 0,
+    eloV2: true,
     stats: { games: 0, wins: 0, losses: 0, draws: 0, botWins: 0, botGames: 0, mates: 0 },
     owned: { board: ['klassisch'], pieces: ['klassisch'], finisher: ['klassisch'] },
     equipped: { board: 'klassisch', pieces: 'klassisch', finisher: 'klassisch' },
     history: [],
     createdAt: Date.now(),
   };
-  db.users[u.id] = u; byToken.set(u.token, u); byCode.set(u.code, u);
+  db.users[u.id] = u; byToken.set(u.token, u); byCode.set(u.code, u); byName.set(nameKey(u.name), u);
   save();
   return u;
 }
 
-const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, stats: { games: u.stats.games, wins: u.stats.wins } });
+// Einmalige Umstellung bestehender Profile: Elo startet bei 0, Namen eindeutig & sauber
+function migrateUsers() {
+  for (const u of Object.values(db.users)) {
+    if (!u.eloV2) { u.rating = 0; u.eloV2 = true; }
+    let n = String(u.name || '').trim().replace(/\s+/g, '_');
+    if (checkUsername(n) || byName.has(nameKey(n))) n = freeGuestName();
+    u.name = n; byName.set(nameKey(n), u);
+  }
+  save();
+}
+
+const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins } });
 const priv = (u) => ({ ...pub(u), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30) });
+// Öffentliches Profil (zum Anklicken in Rangliste / Match)
+const publicProfile = (u) => ({
+  ...pub(u), stats: { ...u.stats }, createdAt: u.createdAt, online: online.has(u.id),
+  history: u.history.slice(0, 8).map((h) => ({ type: h.type, opponent: h.opponent, oppAvatar: h.oppAvatar, outcome: h.outcome, reason: h.reason, rating: h.rating, at: h.at })),
+});
 
 // ---------------------------------------------------------------- Server
 const app = express();
@@ -229,12 +269,22 @@ function endGame(g, result, reason) {
   const winner = result === 'w' ? W : result === 'b' ? B : null;
   const finisher = reason === 'checkmate' && winner ? winner.equipped.finisher : null;
   const plies = g.chess.history().length;
-  for (const [u, color, d, opp] of [[W, 'w', dW, B], [B, 'b', dB, W]]) {
+  for (const [u, color, d0, opp] of [[W, 'w', dW, B], [B, 'b', dB, W]]) {
     const outcome = result === 'draw' ? 'draw' : result === color ? 'win' : 'loss';
+    let d = d0;
     let coins = outcome === 'win' ? REWARDS.win : outcome === 'draw' ? REWARDS.draw : REWARDS.loss;
     if (plies < 4 && reason !== 'checkmate') coins = outcome === 'win' ? Math.round(REWARDS.win / 4) : 0; // Schutz gegen Farming
-    u.coins += coins; u.rating = Math.max(100, u.rating + d);
-    u.stats.games++; u.stats[outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws']++;
+    if (reason === 'abandon') {
+      // Verlassen: wer geht, verliert Elo (keine Münzen) – wer bleibt, bekommt nichts (keine Änderung)
+      coins = 0;
+      if (outcome === 'win') d = 0;
+    }
+    const before = u.rating;
+    u.coins += coins; u.rating = Math.max(0, u.rating + d);
+    d = u.rating - before; // bei 0 Elo kann man nicht weiter fallen
+    if (!(reason === 'abandon' && outcome === 'win')) {
+      u.stats.games++; u.stats[outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws']++;
+    }
     if (outcome === 'win' && reason === 'checkmate') u.stats.mates++;
     u.history.unshift({ type: 'online', opponent: opp.name, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now() });
     u.history = u.history.slice(0, 50);
@@ -298,9 +348,12 @@ io.on('connection', (socket) => {
 
   socket.on('profile:update', need(({ name, avatar } = {}, ack) => {
     if (name !== undefined) {
-      const n = clean(name, 20);
-      if (n.length < 2) return ack?.({ error: 'Der Name braucht mindestens 2 Zeichen.' });
-      user.name = n;
+      const n = clean(name, 16);
+      const err = checkUsername(n);
+      if (err) return ack?.({ error: err });
+      const other = byName.get(nameKey(n));
+      if (other && other !== user) return ack?.({ error: 'Dieser Benutzername ist schon vergeben.' });
+      setName(user, n);
     }
     if (avatar) {
       if (avatar.type === 'emoji' && AVATAR_EMOJIS.includes(avatar.value) && /^#[0-9a-f]{6}$/i.test(avatar.color)) user.avatar = { type: 'emoji', value: avatar.value, color: avatar.color };
@@ -324,6 +377,65 @@ io.on('connection', (socket) => {
     if (!findItem(kind, id) || !user.owned[kind]?.includes(id)) return ack?.({ error: 'Nicht in deinem Besitz.' });
     user.equipped[kind] = id; save(); ack?.({ profile: priv(user) });
   }));
+
+  // --- Bundles: alle fehlenden Teile auf einmal, mit Rabatt
+  socket.on('shop:bundle', need(({ id } = {}, ack) => {
+    const bundle = BUNDLES.find((b) => b.id === id);
+    if (!bundle) return ack?.({ error: 'Unbekanntes Paket.' });
+    const { price, missing } = bundlePrice(bundle, user.owned);
+    if (!missing.length) return ack?.({ error: 'Du besitzt schon alles aus diesem Paket.' });
+    if (user.coins < price) return ack?.({ error: `Dir fehlen ${price - user.coins} Münzen.` });
+    user.coins -= price;
+    for (const [k, itemId] of bundle.items) { if (!user.owned[k].includes(itemId)) user.owned[k].push(itemId); user.equipped[k] = itemId; }
+    save(); ack?.({ profile: priv(user), price });
+  }));
+
+  // --- Konten: Registrieren (Gastprofil wird zum Konto), Anmelden, Passwort ändern
+  const fails = { n: 0, since: Date.now() };
+  const limited = () => {
+    if (Date.now() - fails.since > 10 * 60_000) { fails.n = 0; fails.since = Date.now(); }
+    return fails.n >= 6;
+  };
+  const checkPassword = (pw) => (typeof pw !== 'string' || pw.length < 6 || pw.length > 64 ? 'Das Passwort braucht 6–64 Zeichen.' : null);
+
+  socket.on('account:register', need(({ username, password } = {}, ack) => {
+    if (user.pass) return ack?.({ error: 'Du bist schon mit einem Konto angemeldet. Melde dich zuerst ab.' });
+    const n = clean(username, 16);
+    const err = checkUsername(n) || checkPassword(password);
+    if (err) return ack?.({ error: err });
+    const other = byName.get(nameKey(n));
+    if (other && other !== user) return ack?.({ error: 'Dieser Benutzername ist schon vergeben.' });
+    setName(user, n);
+    user.pass = hashPw(password);
+    save();
+    ack?.({ profile: priv(user) });
+  }));
+
+  socket.on('account:login', need(({ username, password } = {}, ack) => {
+    if (limited()) return ack?.({ error: 'Zu viele Fehlversuche. Warte ein paar Minuten.' });
+    const target = byName.get(nameKey(username));
+    if (!target || !target.pass || !checkPw(password, target.pass)) {
+      fails.n++;
+      return ack?.({ error: 'Benutzername oder Passwort ist falsch.' });
+    }
+    fails.n = 0;
+    ack?.({ token: target.token });
+  }));
+
+  socket.on('account:password', need(({ old, password } = {}, ack) => {
+    const err = checkPassword(password);
+    if (err) return ack?.({ error: err });
+    if (user.pass && !checkPw(old || '', user.pass)) { fails.n++; return ack?.({ error: 'Das alte Passwort stimmt nicht.' }); }
+    user.pass = hashPw(password);
+    save();
+    ack?.({ profile: priv(user) });
+  }));
+
+  // --- Profil eines anderen Spielers ansehen
+  socket.on('profile:get', ({ id } = {}, ack) => {
+    const u = db.users[id];
+    ack?.(u ? { profile: publicProfile(u) } : { error: 'Spieler nicht gefunden.' });
+  });
 
   // --- Einladungscode (6-stellig, zufällig)
   socket.on('room:create', need(({ timeMs = 600_000 } = {}, ack) => {
@@ -490,4 +602,5 @@ try {
   process.exit(1); // lieber neu starten als mit leerer Datenbank alles zu überschreiben
 }
 for (const u of Object.values(db.users)) { byToken.set(u.token, u); byCode.set(u.code, u); }
+migrateUsers();
 server.listen(PORT, () => console.log(`♞ SchachArena läuft auf http://localhost:${PORT}`));

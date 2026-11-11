@@ -359,16 +359,20 @@ export class Engine {
       if (!this.make(m)) continue;
       legal++;
       let sc;
-      if (legal === 1) sc = -this.search(depth - 1, -beta, -alpha, ply + 1);
+      // Zufallsbonus an der Wurzel: Suchfenster vorher verschieben, sonst würden
+      // ungenaue Fail-Low-Grenzen plus Bonus einen schlechten Zug „gewinnen“ lassen
+      const nz = ply === 0 && this.rootNoise ? (this.rootNoise.get(m) || 0) : 0;
+      const a = alpha - nz, bta = beta - nz;
+      if (legal === 1) sc = -this.search(depth - 1, -bta, -a, ply + 1);
       else {
         // Late Move Reduction für ruhige Züge
         const quiet = !this.stack[this.stack.length - 1].cap && !mPro(m);
         const red = quiet && legal > 4 && depth >= 3 && !check ? 1 : 0;
-        sc = -this.search(depth - 1 - red, -alpha - 1, -alpha, ply + 1);
-        if (sc > alpha && sc < beta) sc = -this.search(depth - 1, -beta, -alpha, ply + 1);
+        sc = -this.search(depth - 1 - red, -a - 1, -a, ply + 1);
+        if (sc > a && sc < bta) sc = -this.search(depth - 1, -bta, -a, ply + 1);
       }
       this.unmake();
-      if (ply === 0 && this.rootNoise) sc += this.rootNoise.get(m) || 0;
+      sc += nz;
       if (sc > best) { best = sc; bestMove = m; if (ply === 0) this.rootBest = m; }
       if (sc > alpha) alpha = sc;
       if (alpha >= beta) {
@@ -392,17 +396,54 @@ export class Engine {
   }
 
   // Liefert {from, to, promotion, score, depth}
-  think({ maxDepth = 4, timeMs = 1500, noise = 0, blunder = 0 } = {}) {
+  // Kleinster Wert einer Figur von `by`, die das Feld angreift (0 = keine)
+  minAttacker(sq, by) {
+    const b = this.b;
+    if (by === 1 ? (b[sq + 9] === P || b[sq + 11] === P) : (b[sq - 9] === -P || b[sq - 11] === -P)) return VALUE[P];
+    for (const o of N_OFF) if (b[sq + o] === N * by) return VALUE[N];
+    let best = 0;
+    const consider = (v) => { if (!best || v < best) best = v; };
+    for (const o of B_OFF) { let s = sq + o; while (b[s] === EMPTY) s += o; if (b[s] === B * by) consider(VALUE[B]); else if (b[s] === Q * by) consider(VALUE[Q]); }
+    for (const o of R_OFF) { let s = sq + o; while (b[s] === EMPTY) s += o; if (b[s] === R * by) consider(VALUE[R]); else if (b[s] === Q * by) consider(VALUE[Q]); }
+    if (best) return best;
+    for (const o of K_OFF) if (b[sq + o] === K * by) return 20000;
+    return 0;
+  }
+
+  // Grobe Bewertung jedes Wurzelzugs (1 Halbzug + Schlagabtausch), aus Sicht des Ziehenden
+  rootScan(legal) {
+    return legal.map((m) => {
+      this.make(m);
+      let sc;
+      if (!this.legalMoves().length) sc = this.inCheck() ? MATE : 0;
+      else { try { sc = -this.quiesce(-MATE * 2, MATE * 2, 0); } catch { sc = -this.evaluate(); } }
+      this.unmake();
+      return { m, sc };
+    });
+  }
+
+  // Liefert {from, to, promotion, score, depth}
+  // blunder: Wahrscheinlichkeit für einen „menschlichen“ Fehlzug – aber nur aus Zügen,
+  // die höchstens `margin` Centipawns schlechter sind (keine völlig sinnlosen Züge mehr)
+  think({ maxDepth = 4, timeMs = 1500, noise = 0, blunder = 0, margin = 200 } = {}) {
     const legal = this.legalMoves();
     if (!legal.length) return null;
     const toObj = (m, extra = {}) => ({ from: sqName(mFrom(m)), to: sqName(mTo(m)), promotion: mPro(m) ? ' pnbrqk'[mPro(m)] : undefined, ...extra });
-    if (maxDepth <= 0 || Math.random() < blunder) return toObj(legal[(Math.random() * legal.length) | 0], { random: true });
-    this.rootNoise = noise ? new Map(legal.map((m) => [m, ((Math.random() * 2 - 1) * noise) | 0])) : null;
+    const base = this.stack.length;
     this.killers.fill(0); this.history.fill(0);
     this.nodes = 0;
+    if (Math.random() < blunder) {
+      this.deadline = performance.now() + 5000;
+      const scored = this.rootScan(legal);
+      const top = Math.max(...scored.map((s) => s.sc));
+      const ok = scored.filter((s) => s.sc >= top - margin);
+      const pick = ok[(Math.random() * ok.length) | 0];
+      return toObj(pick.m, { random: true, score: pick.sc, depth: 1 });
+    }
+    this.rootNoise = noise ? new Map(legal.map((m) => [m, ((Math.random() * 2 - 1) * noise) | 0])) : null;
     this.deadline = performance.now() + timeMs;
     let best = legal[0], bestScore = 0, reached = 0;
-    for (let d = 1; d <= maxDepth; d++) {
+    for (let d = 1; d <= Math.max(1, maxDepth); d++) {
       this.rootBest = 0;
       try {
         const sc = this.search(d, -MATE * 2, MATE * 2, 0);
@@ -410,12 +451,41 @@ export class Engine {
         if (Math.abs(sc) > MATE - 100) break;
       } catch (e) {
         if (e !== 'timeout') throw e;
-        // Stack zurückspulen
-        while (this.stack.length) this.unmake();
+        // Stack bis zum Ausgangspunkt zurückspulen
+        while (this.stack.length > base) this.unmake();
         break;
       }
       if (performance.now() > this.deadline - timeMs * 0.45) break;
     }
+    this.rootNoise = null;
     return toObj(best, { score: bestScore, depth: reached, nodes: this.nodes });
+  }
+
+  // Zug-Analyse: Wie gut war `move` im Vergleich zum besten Zug? Ist es ein Opfer?
+  analyze(fenBefore, move, history = [], timeMs = 300) {
+    const clampSc = (s) => (s > MATE - 1000 ? 3000 : s < -(MATE - 1000) ? -3000 : s);
+    this.load(fenBefore, history);
+    const best = this.think({ maxDepth: 30, timeMs });
+    if (!best) return null;
+    const bestScore = clampSc(best.score);
+    const legal = this.legalMoves();
+    const m = legal.find((x) => sqName(mFrom(x)) === move.from && sqName(mTo(x)) === move.to && (!mPro(x) || ' pnbrqk'[mPro(x)] === (move.promotion || 'q')));
+    if (!m) return null;
+    const isBest = best.from === move.from && best.to === move.to;
+    const moved = Math.abs(this.b[mFrom(m)]);
+    const captured = mFlag(m) === 1 ? P : Math.abs(this.b[mTo(m)]);
+    this.make(m);
+    let after;
+    if (!this.legalMoves().length) after = this.inCheck() ? 3000 : 0;
+    else { const r = this.think({ maxDepth: 30, timeMs }); after = -clampSc(r.score); }
+    // Opfer: die gezogene Figur steht angegriffen und geht für weniger als ihren Wert verloren
+    const to = mTo(m), opp = this.side;
+    const att = this.minAttacker(to, opp);
+    const defended = this.attacked(to, -opp);
+    const net = VALUE[moved] - (VALUE[captured] || 0);
+    const sacrifice = moved !== P && moved !== K && att > 0 && net >= 200 && (!defended || att < VALUE[moved] - 50);
+    this.unmake();
+    const loss = isBest ? 0 : Math.max(0, bestScore - after);
+    return { bestScore, after, loss, isBest, sacrifice, best: { from: best.from, to: best.to } };
   }
 }

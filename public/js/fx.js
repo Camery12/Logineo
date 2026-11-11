@@ -206,3 +206,40 @@ export function coinRain(fromEl, toEl, n = 12, onEach) {
     })(performance.now());
   }
 }
+
+// ---------------------------------------------------------------- Aufgeben: Brett wird weggeschmissen
+// Figuren fliegen mit Schwerkraft durch die Gegend, das Brett kippt und fällt aus dem Bild.
+export function tableFlip(frameEl, pieceEls) {
+  return new Promise((resolve) => {
+    const rect = frameEl.getBoundingClientRect();
+    const flyers = pieceEls.map((el) => {
+      const r = el.getBoundingClientRect();
+      const ghost = el.cloneNode(true);
+      ghost.className = 'piece-flyer';
+      ghost.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;background-image:${el.style.backgroundImage}`;
+      document.body.appendChild(ghost);
+      el.style.visibility = 'hidden';
+      const fromCenter = (r.left + r.width / 2 - (rect.left + rect.width / 2)) / rect.width;
+      return { ghost, x: 0, y: 0, vx: fromCenter * rand(600, 1100) + rand(-250, 250), vy: -rand(700, 1300), rot: 0, vr: rand(-720, 720) };
+    });
+    frameEl.classList.add('thrown');
+    const t0 = performance.now();
+    let last = t0;
+    (function step(now) {
+      const dt = Math.min(0.04, (now - last) / 1000); last = now;
+      for (const f of flyers) {
+        f.vy += 2600 * dt; f.x += f.vx * dt; f.y += f.vy * dt; f.rot += f.vr * dt;
+        f.ghost.style.transform = `translate(${f.x}px, ${f.y}px) rotate(${f.rot}deg)`;
+      }
+      if (now - t0 < 1500) requestAnimationFrame(step);
+      else {
+        for (const f of flyers) f.ghost.remove();
+        resolve();
+      }
+    })(t0);
+  });
+}
+export function resetThrown(frameEl) {
+  frameEl.classList.remove('thrown');
+  frameEl.querySelectorAll('.piece').forEach((el) => { el.style.visibility = ''; });
+}
