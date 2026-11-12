@@ -902,3 +902,13 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .rp-ctrl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .rp-ctrl input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); }
 @media (max-width: 760px) { .rp-body { grid-template-columns: 1fr; } .adm-tops { grid-template-columns: 1fr; } .adm-match { grid-template-columns: 28px minmax(0, 1fr) auto; } .am-when { display: none; } }
+/* Warte-Anzeige mitten auf dem Brett */
+.board-frame { position: relative; }
+.board-wait { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(8, 10, 18, .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); border-radius: inherit; animation: fadeIn .25s ease; }
+.bw-card { display: grid; justify-items: center; gap: 8px; text-align: center; padding: 22px 26px; max-width: 78%; border-radius: 20px; background: rgba(20, 23, 36, .94); border: 1px solid rgba(124, 92, 255, .45); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .9); }
+.bw-icon { font-size: 34px; line-height: 1; }
+.bw-spin { width: 26px; height: 26px; }
+.bw-card b { font-size: 18px; }
+.bw-card span { color: var(--muted); font-size: 13px; }
+.bw-count { margin-top: 4px; padding: 6px 12px; border-radius: 99px; background: rgba(255, 45, 85, .15); color: #ff8fa3; font-size: 13px; }
+.bw-count b { font-size: 15px; font-variant-numeric: tabular-nums; }

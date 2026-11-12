@@ -60,7 +60,7 @@ function openOverlay(content, { closable = true, wide = false, onClose = null } 
 }
 
 const REASONS = {
-  checkmate: 'durch Schachmatt', resign: 'durch Aufgabe', timeout: 'auf Zeit', abandon: 'Spiel verlassen',
+  checkmate: 'durch Schachmatt', resign: 'durch Aufgabe', timeout: 'auf Zeit', abandon: 'automatisch aufgegeben (3 Min. ohne Verbindung)',
   stalemate: 'durch Patt', insufficient: 'ungenügendes Material', repetition: 'dreifache Stellungswiederholung',
   fifty: '50-Züge-Regel', agreement: 'Remis vereinbart', draw: 'Remis', 'four-win': '4er-Schach · 1. Platz', 'four-place': '4er-Schach',
 };
@@ -98,7 +98,11 @@ socket.on('connect', async () => {
 });
 // Partie läuft inzwischen auf dem neuen Server: neu verbinden
 socket.on('server:reconnect', () => { state.restarting = true; socket.disconnect(); setTimeout(() => socket.connect(), 400); });
-socket.on('disconnect', () => { if (!state.restarting) toast('Verbindung verloren – verbinde neu…', 'warn'); });
+socket.on('disconnect', () => {
+  if (state.game?.active && !state.game.spectator) setWait('self', { icon: '📡', title: 'Verbindung verloren', sub: 'Verbinde neu … deine Partie ist pausiert und läuft gleich weiter.' });
+  else if (!state.restarting) toast('Verbindung verloren – verbinde neu…', 'warn');
+});
+socket.on('connect', () => clearWait('self'));
 socket.on('server:restarting', () => { state.restarting = true; toast('🔄 Ein Update wird eingespielt – gleich geht es weiter…'); });
 
 // 3D-Finisher schon im Hintergrund laden und vorbereiten, damit er sofort startet
@@ -1402,6 +1406,7 @@ function setBanner(htmlStr) { const b = $('#game-banner'); if (!htmlStr) { b.hid
 // ================================================================ Online-Spiel
 socket.on('game:start', (d) => {
   if (state.game?.spectator) socket.emit('watch:stop');
+  clearWait();
   closeVote();
   $$('.overlay').forEach((o) => o.remove());
   state.bot = null;
@@ -1504,7 +1509,10 @@ function onlineMove(m) {
   playMoveSound(m, m.check);
   g.clock.running = null; // bis Serverbestätigung
   renderOnline();
+  g.moveSending = true;
+  const slow = setTimeout(() => setWait('pending', { icon: '📤', title: 'Bitte warten …', sub: 'Dein Zug wird übertragen.' }), 2500);
   emit('game:move', { from: m.from, to: m.to, promotion: m.promotion }).then((r) => {
+    clearTimeout(slow); g.moveSending = false; clearWait('pending');
     if (r.error) {
       toast(esc(r.error), 'warn');
       g.sans.pop();
@@ -1528,7 +1536,7 @@ socket.on('game:state', (s) => {
   if (g.spectator) return;
   if (s.drawOffer && s.drawOffer !== g.you && prevOffer !== s.drawOffer) showDrawOffer();
   if (!s.drawOffer) setBanner('');
-  if (s.resumed || s.resumedAfterUpdate) { clearInterval(state.oppTimer); setBanner(''); toast('▶️ Weiter geht\'s – beide sind wieder da!', 'good'); }
+  if (s.resumed || s.resumedAfterUpdate) { clearInterval(state.oppTimer); setBanner(''); clearWait('opp'); clearWait('lag'); toast('▶️ Weiter geht\'s – beide sind wieder da!', 'good'); }
   if (s.drawDeclined && g.drawOffer == null && prevOffer === g.you) toast('Remisangebot abgelehnt', 'warn');
 });
 
@@ -1540,25 +1548,70 @@ function showDrawOffer() {
   $('#dd').onclick = () => { socket.emit('game:draw', { action: 'decline' }); setBanner(''); };
 }
 
-socket.on('game:opponent', ({ online, deadline, update, paused }) => {
+socket.on('game:opponent', ({ online, deadline, update }) => {
   if (!state.game?.active) return;
   clearInterval(state.oppTimer);
-  if (online) { setBanner(''); toast('Gegner ist wieder da', 'good'); return; }
-  const upd = () => {
-    const s = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    if (s <= 0) clearInterval(state.oppTimer);
-    setBanner(update
-      ? `<div>⏸️ Kurze Pause wegen Update – warte auf deinen Gegner (<b>${s}s</b>). Die Uhr steht still.</div>`
-      : paused
-        ? `<div>⏸️ <b>Spiel pausiert</b> – dein Gegner hat keine Verbindung. Die Uhr steht. Kommt er in <b>${s}s</b> nicht zurück, verliert er.</div>`
-        : `<div>📡 Dein Gegner hat die Verbindung verloren. Sieg in <b>${s}s</b>, falls er nicht zurückkommt.</div>`);
-  };
-  upd(); state.oppTimer = setInterval(upd, 1000);
+  setBanner('');
+  if (online) { clearWait('opp'); clearWait('lag'); toast('Gegner ist wieder da', 'good'); return; }
+  const g = state.game, opp = g.players[g.you === 'w' ? 'b' : 'w'];
+  setWait('opp', { icon: '⏳', title: `Warte auf ${esc(opp?.name || 'Gegner')} …`, sub: update ? 'Kurze Pause wegen eines Updates – die Uhr steht still.' : 'Seine Verbindung ist unterbrochen – die Uhr steht still.', deadline, deadlineText: 'Automatische Aufgabe in' });
 });
+socket.on('game:lag', ({ id, laggy, name }) => {
+  if (state.game?.id !== id || !state.game.active) return;
+  if (laggy) setWait('lag', { icon: '🐢', title: 'Bitte warten …', sub: `Die Verbindung von ${esc(name || 'deinem Gegner')} ist gerade sehr langsam.` });
+  else clearWait('lag');
+});
+
+// ---------------------------------------------------------------- Warte-Anzeige mitten auf dem Brett
+// Mehrere Gründe gleichzeitig möglich – angezeigt wird der wichtigste.
+const WAIT_ORDER = ['self', 'opp', 'sync', 'pending', 'lag'];
+const waits = {};
+let waitTick = 0;
+function setWait(key, info) { waits[key] = info; renderWait(); }
+function clearWait(key) { if (key) delete waits[key]; else for (const k of Object.keys(waits)) delete waits[k]; renderWait(); }
+function renderWait() {
+  const el = $('#board-wait'); if (!el) return;
+  const key = WAIT_ORDER.find((k) => waits[k]);
+  clearInterval(waitTick);
+  if (!key || !state.game?.active) { el.hidden = true; el.innerHTML = ''; return; }
+  const w = waits[key];
+  const draw = () => {
+    let cd = '';
+    if (w.deadline) {
+      const s = Math.max(0, Math.ceil((w.deadline - Date.now()) / 1000));
+      cd = `<div class="bw-count">${w.deadlineText || 'Noch'} <b>${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}</b></div>`;
+    }
+    el.innerHTML = `<div class="bw-card"><div class="bw-icon">${w.icon || '⏳'}</div><div class="spinner bw-spin"></div><b>${w.title}</b><span>${w.sub || ''}</span>${cd}</div>`;
+  };
+  el.hidden = false; draw();
+  if (w.deadline) waitTick = setInterval(draw, 1000);
+}
+
+// ---------------------------------------------------------------- Abgleich mit dem Server (alle 4 s)
+setInterval(async () => {
+  const g = state.game;
+  if (!g?.active || g.spectator || !socket.connected || g.moveSending || state.view !== 'game') return;
+  const r = await emit('game:sync', { id: g.id, ply: g.sans.length, fen: board.fen });
+  if (state.game !== g || g.moveSending) return;
+  if (r.resync) {
+    setWait('sync', { icon: '🔄', title: 'Synchronisiere …', sub: 'Dein Brett wird mit dem Server abgeglichen.' });
+    applyResync(r.resync);
+    setTimeout(() => clearWait('sync'), 900);
+  } else if (r.clock) { g.clock = r.clock; g.clockAt = performance.now(); if (r.opponentOnline) clearWait('opp'); }
+}, 4000);
+function applyResync(d) {
+  const g = state.game; if (!g) return;
+  Object.assign(g, { fen: d.fen, moves: d.moves, clock: d.clock, drawOffer: d.drawOffer, clockAt: performance.now(), sans: d.moves.map((m) => m.san), fens: [], anaChess: d.startFen ? new Chess(d.startFen) : new Chess() });
+  for (const m of d.moves) { g.fens.push(g.anaChess.fen()); try { g.anaChess.move(m.san); } catch { /* egal */ } }
+  const last = d.moves.at(-1);
+  board.load(d.fen, last ? { from: last.from, to: last.to } : null, false);
+  renderOnline();
+}
 
 socket.on('game:emote', ({ emote }) => showEmote(emote));
 socket.on('game:cancelled', () => {
   if (!state.game) return;
+  clearWait();
   clearInterval(state.oppTimer); setBanner('');
   state.game.active = false; renderOnline();
   toast('Die Partie wurde nach dem Update ohne Wertung beendet, weil dein Gegner nicht zurückkam.', 'warn');
@@ -1570,6 +1623,7 @@ function showEmote(e) {
 
 socket.on('game:over', async (d) => {
   const g = state.game; if (!g || g.id !== d.id) return;
+  clearWait();
   if (d.spectator) return spectatorOver(g, d);
   clearInterval(state.oppTimer);
   g.active = false;
@@ -1623,7 +1677,7 @@ function showResult({ outcome, reason, coins, rating, online, bot, training = fa
     // Gegner hat das Spiel verlassen: keine Wertung für den, der bleibt
     sound.notify();
     const ov = openOverlay(`<div class="result-head draw"><div class="result-icon">🚪</div><h2>Gegner weg</h2>
-      <p class="muted">Dein Gegner hat das Spiel verlassen und verliert dafür Elo. Für dich ändert sich nichts.</p></div>
+      <p class="muted">Dein Gegner war 3 Minuten ohne Verbindung und hat automatisch aufgegeben. Er verliert dafür Elo – für dich ändert sich nichts.</p></div>
       <div class="modal-actions"><button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">⚡ Neues Match</button></div>`);
     $$('[data-r]', ov.el).forEach((b) => b.onclick = () => { ov.close(); go('play'); if (b.dataset.r === 'again') $('#search-btn')?.click(); });
     return;

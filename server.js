@@ -16,7 +16,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'db.json');
 const VOTE_MS = 12000;
-const RECONNECT_MS = 60000;   // so lange ist ein Spiel pausiert, bevor "Verlassen" zählt
+const RECONNECT_MS = Number(process.env.RECONNECT_MS) || 180_000; // 3 Minuten ohne Verbindung -> automatisch aufgegeben (Spiel ist so lange pausiert)
+const LAG_MS = 14_000;        // so lange ohne Lebenszeichen gilt eine Verbindung als hängend
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const VARIANTS = { queens: 'qqqqkqqq/qqqqqqqq/8/8/8/8/QQQQQQQQ/QQQQKQQQ w - - 0 1' }; // Queen-Modus: alles Damen außer den Königen
 const RESTORE_MS = 90_000;      // nach einem Update: so lange haben beide Zeit, zurückzukommen
@@ -681,6 +682,23 @@ setInterval(() => {
     }
   }
 }, 200);
+
+// Hängende Verbindungen erkennen (Socket noch offen, aber keine Antwort mehr, z. B. iPad im Hintergrund)
+setInterval(() => {
+  const now = Date.now();
+  for (const g of games.values()) {
+    if (g.status !== 'playing') continue;
+    g.lag ||= {};
+    for (const c of ['w', 'b']) {
+      const uid = g.players[c], sock = online.get(uid);
+      const laggy = !!sock && now - (sock.data.lastSeen || now) > LAG_MS;
+      if (laggy !== !!g.lag[uid]) {
+        g.lag[uid] = laggy;
+        emitTo(opponentOf(g, uid), 'game:lag', { id: g.id, laggy, name: db.users[uid]?.name });
+      }
+    }
+  }
+}, 3000);
 
 // ---------------------------------------------------------------- Updates ohne Spielabbruch
 // Jede laufende Partie wird nach jedem Zug in der Datenbank gespeichert (mit "owner" = Server-Instanz).
@@ -1559,6 +1577,17 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
     sendState(g, { san: m.san, flags: m.flags, captured: m.captured, check: g.chess.inCheck() });
     checkGameEnd(g);
+  }));
+
+  // Abgleich: Client meldet seinen Stand, bei Abweichung bekommt er die echte Stellung
+  socket.on('game:sync', need(({ id, ply, fen } = {}, ack) => {
+    const g = games.get(userGame.get(user.id));
+    if (!g || g.status === 'over') return ack?.({ gone: true });
+    if (g.id !== id) return ack?.({ resync: { ...gamePayload(g, user.id), resumed: true } });
+    if (g.status !== 'playing') return ack?.({ ok: true });
+    const okSync = ply === g.chess.history().length && fen === g.chess.fen();
+    if (!okSync) return ack?.({ resync: { ...gamePayload(g, user.id), resumed: true } });
+    ack?.({ ok: true, clock: clockState(g), opponentOnline: online.has(opponentOf(g, user.id)) });
   }));
 
   socket.on('game:resign', need(() => { const g = myGame(); if (g) endGame(g, g.players.w === user.id ? 'b' : 'w', 'resign'); }));
