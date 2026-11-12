@@ -41,3 +41,34 @@ export function checkUsername(name) {
   if (badWord(n)) return 'Dieser Name enthält ein unerlaubtes Wort.';
   return null;
 }
+
+// Chat-Filter: prüft Wort für Wort (sonst würden z. B. „war schön“ → „arsch“ oder „das ex“ → „sex“ geblockt).
+// Schach-/Alltagswörter wie „Opfer“ (Figurenopfer) oder „dick“ sind erlaubt; kurze, mehrdeutige Wörter zählen nur als ganzes Wort.
+const CHAT_ALLOW = new Set(['opfer', 'opfern', 'geopfert', 'damenopfer', 'bauernopfer', 'loser', 'dick', 'dicke', 'dicken', 'dicker']);
+const CHAT_ONLY_WHOLE = new Set(['sex', 'dick', 'ass', 'mongo', 'rape', 'isis', 'kys', 'cock', 'fuk', 'opfer', 'loser', 'terror']);
+export function badChat(text) {
+  const tokens = String(text || '').toLowerCase().split(/\s+/).filter(Boolean);
+  // getrennt geschriebene Buchstaben („f i c k“, „f.i.c.k“) zusammensetzen
+  const merged = [];
+  let run = '';
+  for (const t of tokens) {
+    const l = normalize(t).replace(/[^a-z]/g, '');
+    if (l.length === 1) { run += l; continue; }
+    if (run) { merged.push(run); run = ''; }
+    merged.push(t);
+  }
+  if (run) merged.push(run);
+  for (const tok of merged) {
+    const n = normalize(tok);
+    const letters = n.replace(/[^a-z]/g, '');
+    if (!letters || CHAT_ALLOW.has(letters)) continue;
+    const collapsed = letters.replace(/(.)\1+/g, '$1');
+    for (const w of BLOCK) {
+      const wn = normalize(w).replace(/[^a-z]/g, '');
+      if (CHAT_ONLY_WHOLE.has(wn)) { if (letters === wn || collapsed === wn) return w; continue; }
+      if (letters.includes(wn) || collapsed.includes(wn.replace(/(.)\1+/g, '$1'))) return w;
+    }
+    for (const w of WHOLE) if (letters === w || n === w) return w;
+  }
+  return null;
+}

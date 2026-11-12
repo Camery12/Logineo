@@ -29,6 +29,7 @@
       <button data-view="bots"><span class="ni">🤖</span><span>Bots</span></button>
       <button data-view="shop"><span class="ni">🛒</span><span>Shop</span></button>
       <button data-view="leaderboard"><span class="ni">🏆</span><span>Rangliste</span></button>
+      <button data-view="friends"><span class="ni">💬<b class="nav-badge" id="friends-badge" hidden></b></span><span>Freunde</span></button>
       <button data-view="profile"><span class="ni">👤</span><span>Profil</span></button>
     </nav>
     <div class="top-right">
@@ -48,6 +49,7 @@
     <section class="view" id="view-leaderboard"></section>
     <section class="view" id="view-profile"></section>
     <section class="view" id="view-four"></section>
+    <section class="view" id="view-friends"></section>
     <section class="view" id="view-game">
       <div class="game-layout">
         <div class="board-col">
@@ -74,6 +76,7 @@
   <footer class="site-foot" id="site-foot"></footer>
   <div id="overlay-root"></div>
   <div id="toast-root"></div>
+  <div id="notify-root"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="js/app.js"></script>

@@ -76,6 +76,7 @@ socket.on('connect', async () => {
   if (!r.token) return;
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
+  if (r.social) { const firstTime = !state.social; setSocial(r.social); if (firstTime && r.social.requests) notify({ icon: '👋', title: `${r.social.requests} Freundschaftsanfrage${r.social.requests > 1 ? 'n' : ''}`, text: 'Schau unter „Freunde“ nach.', actions: [{ label: 'Ansehen', cls: 'primary', onClick: () => go('friends') }] }); if (firstTime && r.social.unread) notify({ icon: '💬', title: `${r.social.unread} ungelesene Nachricht${r.social.unread > 1 ? 'en' : ''}`, text: 'Deine Freunde haben dir geschrieben.', actions: [{ label: 'Lesen', cls: 'primary', onClick: () => go('friends') }] }); }
   if (state.game?.spectator && state.game.active) socket.emit('watch:start', { id: state.game.id }, (rr) => { if (rr?.error) { toast('Das Live-Match ist vorbei.', 'warn'); state.game = null; go('play'); } });
   if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
   if (!state.booted) {
@@ -367,7 +368,7 @@ function animateNumber(el, from, to) {
 
 // ================================================================ Navigation
 function go(view) {
-  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four'].includes(view)) view = 'play';
+  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four', 'friends'].includes(view)) view = 'play';
   if (view === 'game' && !state.game && !state.bot) view = 'play';
   if (view === 'four' && !state.four) view = 'play';
   if (state.view === 'four' && view !== 'four' && fourActive()) { toast('Du spielst gerade 4er-Schach – gib erst auf oder spiel zu Ende.', 'warn'); return; }
@@ -382,6 +383,7 @@ function go(view) {
   try { history.replaceState(null, '', `#${view}`); } catch { /* egal */ }
   if (view === 'shop') renderShop();
   if (view === 'profile') renderProfile();
+  if (view === 'friends') renderFriends();
   if (view === 'leaderboard') renderLeaderboard();
   if (view === 'play') renderPlay();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -566,6 +568,186 @@ socket.on('challenge:incoming', ({ id, from }) => {
   $$('[data-a]', ov.el).forEach((b) => b.onclick = () => answer(b.dataset.a === '1'));
   const timer = setTimeout(() => answer(false), 30000);
 });
+
+// ================================================================ Popups mit Knöpfen
+function notify({ icon = '🔔', title = '', text = '', actions = [], onClick = null, timeout = 8000, avatarObj = null } = {}) {
+  const el = html(`<div class="notify">
+    <div class="nt-icon">${avatarObj ? avatar(avatarObj, 40) : icon}</div>
+    <div class="nt-body"><b>${title}</b>${text ? `<span>${text}</span>` : ''}${actions.length ? `<div class="nt-actions">${actions.map((a, i) => `<button class="btn sm ${a.cls || ''}" data-a="${i}">${a.label}</button>`).join('')}</div>` : ''}</div>
+    <button class="nt-x" title="Schließen">✕</button></div>`);
+  const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 250); };
+  el.querySelector('.nt-x').onclick = (e) => { e.stopPropagation(); close(); };
+  $$('[data-a]', el).forEach((b) => b.onclick = (e) => { e.stopPropagation(); actions[+b.dataset.a].onClick?.(); close(); });
+  if (onClick) { el.classList.add('clickable'); el.onclick = () => { onClick(); close(); }; }
+  const root = $('#notify-root');
+  root.prepend(el);
+  while (root.children.length > 4) root.lastElementChild.remove();
+  if (timeout) setTimeout(close, timeout);
+  return { close };
+}
+
+// ================================================================ Freunde & Chat
+function setSocial(s) {
+  state.social = { unread: s.unread || 0, requests: s.requests || 0 };
+  const n = state.social.unread + state.social.requests, b = $('#friends-badge');
+  if (b) { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; }
+}
+const fmtTime = (t) => { const d = new Date(t), now = new Date(); const hm = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); return d.toDateString() === now.toDateString() ? hm : `${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} ${hm}`; };
+
+async function renderFriends() {
+  const root = $('#view-friends');
+  if (!root.querySelector('.friends-layout')) {
+    root.innerHTML = `<div class="section-title"><div><h2>Freunde</h2><p>Suche Spieler, schick Freundschaftsanfragen und schreib mit deinen Freunden.</p></div></div>
+      <div class="friends-layout ${state.chatWith ? 'chat-open' : ''}">
+        <div class="card fr-side">
+          <div class="fr-search"><input id="fr-q" placeholder="🔎 Spieler suchen (Name)…" autocomplete="off" maxlength="20"></div>
+          <div id="fr-results"></div>
+          <div id="fr-requests"></div>
+          <h4 class="fr-h">Deine Freunde</h4>
+          <div id="fr-list"><p class="muted small">Lade…</p></div>
+        </div>
+        <div class="card fr-chat" id="fr-chat"><div class="fr-empty"><div style="font-size:42px">💬</div><b>Wähle einen Freund aus</b><span class="muted small">oder suche links nach Spielern, um Freunde hinzuzufügen.</span></div></div>
+      </div>`;
+    let tm = 0;
+    $('#fr-q').oninput = () => { clearTimeout(tm); tm = setTimeout(searchPlayers, 250); };
+  }
+  await loadFriends();
+  if (state.chatWith) openChat(state.chatWith, { keep: true });
+}
+async function searchPlayers() {
+  const q = $('#fr-q')?.value.trim() || '';
+  const box = $('#fr-results'); if (!box) return;
+  if (q.length < 2) { box.innerHTML = ''; return; }
+  const { list = [] } = await emit('users:search', { q });
+  box.innerHTML = list.length ? `<h4 class="fr-h">Suchergebnisse</h4>${list.map((u) => {
+    const btn = { none: `<button class="btn sm primary" data-req="${esc(u.id)}">➕ Anfrage</button>`, sent: '<span class="muted small">⏳ Gesendet</span>', received: `<button class="btn sm good" data-acc="${esc(u.id)}">✅ Annehmen</button>`, friend: `<button class="btn sm" data-chat="${esc(u.id)}">💬 Chat</button>` }[u.relation];
+    return `<div class="fr-row">${avatar(u.avatar, 34)}<div class="fr-name"><b>${esc(u.name)}</b><span>${u.rating} Elo${u.online ? ' · <i class="dot"></i> online' : ''}</span></div>${btn}</div>`;
+  }).join('')}` : '<p class="muted small">Niemand mit diesem Namen gefunden.</p>';
+  wireFriendButtons(box);
+}
+function wireFriendButtons(box) {
+  $$('[data-req]', box).forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    const r = await emit('friend:request', { id: b.dataset.req });
+    if (r.error) { b.disabled = false; return toast(esc(r.error), 'warn'); }
+    toast(r.friends ? '🎉 Ihr seid jetzt Freunde!' : '📨 Freundschaftsanfrage gesendet', 'good');
+    searchPlayers(); loadFriends();
+  });
+  $$('[data-acc]', box).forEach((b) => b.onclick = () => respondFriend(b.dataset.acc, true));
+  $$('[data-dec]', box).forEach((b) => b.onclick = () => respondFriend(b.dataset.dec, false));
+  $$('[data-cancel]', box).forEach((b) => b.onclick = async () => { await emit('friend:cancel', { id: b.dataset.cancel }); loadFriends(); searchPlayers(); });
+  $$('[data-chat]', box).forEach((b) => b.onclick = () => openChat(b.dataset.chat));
+  $$('[data-prof]', box).forEach((b) => b.onclick = (e) => { e.stopPropagation(); showPlayerProfile(b.dataset.prof); });
+}
+async function respondFriend(id, accept) {
+  const r = await emit('friend:respond', { id, accept });
+  if (r.error) return toast(esc(r.error), 'warn');
+  setSocial(r);
+  toast(accept ? '🎉 Ihr seid jetzt Freunde!' : 'Anfrage abgelehnt', accept ? 'good' : '');
+  if (state.view === 'friends') { loadFriends(); searchPlayers(); if (accept) openChat(id); }
+}
+async function loadFriends() {
+  const r = await emit('friends:list');
+  if (!r.friends) return;
+  setSocial(r);
+  state.friendsData = r;
+  const req = $('#fr-requests'), list = $('#fr-list');
+  if (!list) return;
+  req.innerHTML = (r.incoming.length ? `<h4 class="fr-h">Anfragen an dich <span class="nav-badge inline">${r.incoming.length}</span></h4>${r.incoming.map((u) => `<div class="fr-row hl">${avatar(u.avatar, 34)}<div class="fr-name"><b>${esc(u.name)}</b><span>${u.rating} Elo${u.online ? ' · <i class="dot"></i> online' : ''}</span></div><button class="btn sm good" data-acc="${esc(u.id)}">✅</button><button class="btn sm" data-dec="${esc(u.id)}">✕</button></div>`).join('')}` : '')
+    + (r.outgoing.length ? `<h4 class="fr-h">Gesendete Anfragen</h4>${r.outgoing.map((u) => `<div class="fr-row">${avatar(u.avatar, 30)}<div class="fr-name"><b>${esc(u.name)}</b><span>wartet auf Antwort…</span></div><button class="btn sm" data-cancel="${esc(u.id)}" title="Zurückziehen">↩️</button></div>`).join('')}` : '');
+  list.innerHTML = r.friends.length ? r.friends.map((f) => `<button class="fr-row fr-friend ${state.chatWith === f.id ? 'active' : ''}" data-chat="${esc(f.id)}">
+      <span class="fr-av">${avatar(f.avatar, 38)}${f.online ? '<i class="dot"></i>' : ''}</span>
+      <div class="fr-name"><b>${esc(f.name)}</b><span>${f.online ? 'online' : 'offline'} · ${f.rating} Elo</span></div>
+      ${f.unread ? `<span class="nav-badge inline">${f.unread}</span>` : ''}</button>`).join('')
+    : '<p class="muted small">Noch keine Freunde. Such oben nach Spielern und schick eine Anfrage!</p>';
+  wireFriendButtons(req); wireFriendButtons(list);
+}
+async function openChat(id, { keep = false } = {}) {
+  if (state.view !== 'friends') { state.chatWith = id; go('friends'); return; }
+  state.chatWith = id;
+  $('.friends-layout')?.classList.add('chat-open');
+  $$('.fr-friend').forEach((b) => b.classList.toggle('active', b.dataset.chat === id));
+  const box = $('#fr-chat'); if (!box) return;
+  if (!keep || !box.dataset.id || box.dataset.id !== id) box.innerHTML = '<div class="fr-empty"><span class="spinner"></span></div>';
+  const r = await emit('chat:history', { id });
+  if (r.error) { toast(esc(r.error), 'warn'); state.chatWith = null; box.innerHTML = ''; return; }
+  setSocial(r);
+  const f = r.friend;
+  box.dataset.id = id;
+  box.innerHTML = `<div class="ch-head">
+      <button class="btn sm ch-back" title="Zurück">←</button>
+      <span class="fr-av">${avatar(f.avatar, 40)}${f.online ? '<i class="dot"></i>' : ''}</span>
+      <div class="fr-name"><b>${esc(f.name)}</b><span id="ch-status">${f.online ? 'online' : 'offline'} · ${f.rating} Elo</span></div>
+      <button class="btn sm" id="ch-challenge" title="Zu einer Partie herausfordern">⚔️ Spielen</button>
+      <button class="btn sm" id="ch-profile" title="Profil">👤</button>
+      <button class="btn sm danger" id="ch-remove" title="Freund entfernen">🗑️</button>
+    </div>
+    <div class="ch-msgs" id="ch-msgs">${r.msgs.length ? '' : `<div class="ch-hint">Sag Hallo zu ${esc(f.name)}! 👋<br><span class="muted small">Bitte bleib freundlich – Schimpfwörter werden blockiert.</span></div>`}</div>
+    <form class="ch-form" id="ch-form"><input id="ch-input" maxlength="300" placeholder="Nachricht an ${esc(f.name)}…" autocomplete="off"><button class="btn primary">Senden</button></form>`;
+  const msgs = $('#ch-msgs');
+  for (const m of r.msgs) appendMsg(m, false);
+  msgs.scrollTop = msgs.scrollHeight;
+  $('.ch-back', box).onclick = () => { state.chatWith = null; $('.friends-layout')?.classList.remove('chat-open'); loadFriends(); };
+  $('#ch-profile').onclick = () => showPlayerProfile(id);
+  $('#ch-challenge').onclick = async () => { const rr = await emit('friend:challenge', { id }); rr.error ? toast(esc(rr.error), 'warn') : toast(`⚔️ Herausforderung an ${esc(f.name)} gesendet…`, 'good'); };
+  $('#ch-remove').onclick = () => confirmBox('Freund entfernen?', `${esc(f.name)} wird aus deiner Freundesliste entfernt. Ihr könnt euch dann nicht mehr schreiben.`, 'Entfernen', async () => {
+    await emit('friend:remove', { id }); state.chatWith = null; box.innerHTML = ''; $('.friends-layout')?.classList.remove('chat-open'); loadFriends();
+  });
+  $('#ch-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const inp = $('#ch-input'), text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    const rr = await emit('chat:send', { id, text });
+    if (rr.error) { inp.value = text; return toast(esc(rr.error), 'warn'); }
+    appendMsg(rr.msg, true);
+  };
+  if (!matchMedia('(max-width: 900px)').matches) $('#ch-input').focus();
+  loadFriends();
+}
+function appendMsg(m, scroll = true) {
+  const box = $('#ch-msgs'); if (!box) return;
+  box.querySelector('.ch-hint')?.remove();
+  const mine = m.from === state.profile?.id;
+  box.insertAdjacentHTML('beforeend', `<div class="ch-msg ${mine ? 'me' : ''}"><span>${esc(m.text)}</span><small>${fmtTime(m.at)}</small></div>`);
+  if (scroll) box.scrollTop = box.scrollHeight;
+}
+const chatVisible = (id) => state.view === 'friends' && state.chatWith === id && !document.hidden && $('#fr-chat')?.dataset.id === id;
+socket.on('chat:msg', ({ from, msg, unread, requests }) => {
+  if (chatVisible(from.id)) {
+    appendMsg(msg); sound.click();
+    socket.emit('chat:read', { id: from.id });
+    setSocial({ unread: Math.max(0, unread - 1), requests });
+    return;
+  }
+  setSocial({ unread, requests });
+  sound.notify();
+  notify({ avatarObj: from.avatar, title: `💬 ${esc(from.name)}`, text: esc(msg.text.length > 90 ? msg.text.slice(0, 90) + '…' : msg.text), onClick: () => openChat(from.id), actions: [{ label: 'Antworten', cls: 'primary', onClick: () => openChat(from.id) }] });
+  if (state.view === 'friends') loadFriends();
+});
+socket.on('friend:request', ({ from, unread, requests }) => {
+  setSocial({ unread, requests });
+  sound.notify();
+  notify({ avatarObj: from.avatar, title: `👋 ${esc(from.name)} möchte dein Freund sein`, text: `${from.rating} Elo`, timeout: 15000,
+    actions: [{ label: '✅ Annehmen', cls: 'good', onClick: () => respondFriend(from.id, true) }, { label: 'Ablehnen', onClick: () => respondFriend(from.id, false) }, { label: '👤', onClick: () => showPlayerProfile(from.id) }] });
+  if (state.view === 'friends') loadFriends();
+});
+socket.on('friend:accepted', ({ by }) => {
+  sound.notify();
+  notify({ avatarObj: by.avatar, title: `🎉 ${esc(by.name)} ist jetzt dein Freund`, text: 'Ihr könnt euch jetzt schreiben.', actions: [{ label: '💬 Schreiben', cls: 'primary', onClick: () => openChat(by.id) }] });
+  if (state.view === 'friends') { loadFriends(); searchPlayers(); }
+});
+socket.on('friend:removed', ({ id }) => {
+  if (state.chatWith === id) { state.chatWith = null; const b = $('#fr-chat'); if (b) b.innerHTML = ''; $('.friends-layout')?.classList.remove('chat-open'); }
+  if (state.view === 'friends') loadFriends();
+});
+socket.on('friend:status', ({ id, online }) => {
+  if (state.view !== 'friends') return;
+  const row = $(`.fr-friend[data-chat="${CSS.escape(id)}"]`);
+  if (row) loadFriends();
+  if (state.chatWith === id) { const st = $('#ch-status'); if (st) st.textContent = st.textContent.replace(/^(online|offline)/, online ? 'online' : 'offline'); }
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.chatWith && state.view === 'friends') socket.emit('chat:read', { id: state.chatWith }); });
 
 // ================================================================ Live zuschauen
 async function refreshLive() {

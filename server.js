@@ -8,7 +8,7 @@ import { Server } from 'socket.io';
 import compression from 'compression';
 import { Chess } from 'chess.js';
 import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
-import { checkUsername, badWord } from './public/js/censor.js';
+import { checkUsername, badWord, badChat } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
 
@@ -28,7 +28,7 @@ const freshBoot = () => Date.now() - BOOT < 20 * 60_000;
 // Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
 const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-let mongoUsers = null, mongoMusic = null, mongoGames = null;
+let mongoUsers = null, mongoMusic = null, mongoGames = null, mongoChats = null;
 const INSTANCE = crypto.randomUUID(); // jede Server-Instanz hat eine eigene Kennung
 const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
 
@@ -40,6 +40,8 @@ async function loadDb() {
     mongoUsers = client.db(process.env.MONGODB_DB || 'schacharena').collection('users');
     mongoMusic = client.db(process.env.MONGODB_DB || 'schacharena').collection('music');
     mongoGames = client.db(process.env.MONGODB_DB || 'schacharena').collection('games');
+    mongoChats = client.db(process.env.MONGODB_DB || 'schacharena').collection('chats');
+    await mongoChats.createIndex({ id: 1 }, { unique: true });
     await mongoGames.createIndex({ id: 1 }, { unique: true });
     await mongoGames.createIndex({ uids: 1 });
     await mongoMusic.createIndex({ id: 1 }, { unique: true });
@@ -54,6 +56,7 @@ async function loadDb() {
     try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch { /* neue DB */ }
     db.users ||= {};
     db.music ||= {};
+    db.chats ||= {};
     console.log(`⚠️  Keine MONGODB_URI gesetzt – speichere in ${DB_FILE} (geht bei Render-Free bei Updates verloren)`);
   }
 }
@@ -809,6 +812,50 @@ async function userByToken(token) {
   return fresh;
 }
 
+// ---------------------------------------------------------------- Freunde & Chat
+const MAX_FRIENDS = 200, CHAT_KEEP = 200, CHAT_LEN = 300;
+const social = (u) => { u.friends ||= []; u.freqIn ||= []; u.freqOut ||= []; u.unread ||= {}; return u; };
+const chatKey = (a, b) => [a, b].sort().join(':');
+const chatCache = new Map(); // key -> [{ from, text, at }]
+async function chatLoad(key) {
+  if (chatCache.has(key)) return chatCache.get(key);
+  let msgs = [];
+  if (mongoChats) { const d = await mongoChats.findOne({ id: key }); msgs = d?.msgs || []; }
+  else msgs = db.chats?.[key] || [];
+  chatCache.set(key, msgs);
+  if (chatCache.size > 500) chatCache.delete(chatCache.keys().next().value);
+  return msgs;
+}
+async function chatStore(key, msgs) {
+  chatCache.set(key, msgs);
+  if (mongoChats) await mongoChats.replaceOne({ id: key }, { id: key, msgs }, { upsert: true });
+  else { db.chats ||= {}; db.chats[key] = msgs; save(); }
+}
+const friendInfo = (me, f) => ({ ...pub(f), online: online.has(f.id), unread: social(me).unread[f.id] || 0 });
+function socialSummary(u) {
+  social(u);
+  return { unread: Object.values(u.unread).reduce((a, b) => a + b, 0), requests: u.freqIn.length };
+}
+// Freunde informieren, wenn jemand online/offline geht
+function notifyFriends(u, isOnline) {
+  for (const id of social(u).friends) emitTo(id, 'friend:status', { id: u.id, online: isOnline });
+}
+const relation = (me, other) => {
+  social(me);
+  if (me.friends.includes(other.id)) return 'friend';
+  if (me.freqOut.includes(other.id)) return 'sent';
+  if (me.freqIn.includes(other.id)) return 'received';
+  return 'none';
+};
+function makeFriends(a, b) {
+  social(a); social(b);
+  for (const [x, y] of [[a, b], [b, a]]) {
+    x.freqIn = x.freqIn.filter((id) => id !== y.id);
+    x.freqOut = x.freqOut.filter((id) => id !== y.id);
+    if (!x.friends.includes(y.id)) x.friends.push(y.id);
+  }
+}
+
 // ---------------------------------------------------------------- Sockets
 const clean = (s, n) => String(s ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, n);
 const ALLOWED_TIMES = [0, 60_000, 180_000, 300_000, 600_000, 900_000];
@@ -828,7 +875,8 @@ io.on('connection', (socket) => {
     const old = online.get(user.id);
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
-    ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null });
+    ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, social: socialSummary(user) });
+    notifyFriends(user, true);
     // Laufendes 4er-Spiel fortsetzen
     const g4 = fourGameOf(user.id);
     if (g4 && g4.status === 'playing') {
@@ -1173,6 +1221,115 @@ io.on('connection', (socket) => {
     ack?.({ error: 'Kein Spiel oder Spieler mit diesem Code gefunden.' });
   }));
 
+  // --- Freunde & Chat
+  socket.on('users:search', need(({ q } = {}, ack) => {
+    const k = nameKey(clean(q, 20));
+    if (k.length < 2) return ack?.({ list: [] });
+    const list = Object.values(db.users)
+      .filter((u) => u.id !== user.id && nameKey(u.name).includes(k))
+      .sort((a, b) => (nameKey(a.name).startsWith(k) ? 0 : 1) - (nameKey(b.name).startsWith(k) ? 0 : 1) || (online.has(b.id) - online.has(a.id)) || b.rating - a.rating)
+      .slice(0, 12)
+      .map((u) => ({ ...pub(u), online: online.has(u.id), relation: relation(user, u) }));
+    ack?.({ list });
+  }));
+  socket.on('friends:list', need((_, ack) => {
+    social(user);
+    const get = (ids) => ids.map((id) => db.users[id]).filter(Boolean);
+    const friends = get(user.friends).map((f) => friendInfo(user, f)).sort((a, b) => (b.unread - a.unread) || (b.online - a.online) || a.name.localeCompare(b.name));
+    ack?.({ friends, incoming: get(user.freqIn).map((u) => ({ ...pub(u), online: online.has(u.id) })), outgoing: get(user.freqOut).map((u) => ({ ...pub(u), online: online.has(u.id) })), ...socialSummary(user) });
+  }));
+  socket.on('friend:request', need(({ id } = {}, ack) => {
+    const t = db.users[id];
+    if (!t || t.id === user.id) return ack?.({ error: 'Spieler nicht gefunden.' });
+    social(user); social(t);
+    const rel = relation(user, t);
+    if (rel === 'friend') return ack?.({ error: `${t.name} ist schon dein Freund.` });
+    if (rel === 'sent') return ack?.({ error: 'Anfrage wurde schon gesendet.' });
+    if (rel === 'received') { // er hat dich schon gefragt -> direkt Freunde
+      makeFriends(user, t); save();
+      emitTo(t.id, 'friend:accepted', { by: { ...pub(user), online: true } });
+      return ack?.({ ok: true, friends: true });
+    }
+    if (user.friends.length >= MAX_FRIENDS) return ack?.({ error: 'Du hast schon sehr viele Freunde.' });
+    if (user.freqOut.length >= 50) return ack?.({ error: 'Zu viele offene Anfragen – warte, bis welche beantwortet werden.' });
+    user.freqOut.push(t.id); t.freqIn.push(user.id);
+    save();
+    emitTo(t.id, 'friend:request', { from: { ...pub(user), online: true }, ...socialSummary(t) });
+    ack?.({ ok: true });
+  }));
+  socket.on('friend:respond', need(({ id, accept } = {}, ack) => {
+    const t = db.users[id];
+    social(user);
+    if (!t || !user.freqIn.includes(t.id)) return ack?.({ error: 'Keine Anfrage gefunden.' });
+    social(t);
+    if (accept) {
+      makeFriends(user, t);
+      emitTo(t.id, 'friend:accepted', { by: { ...pub(user), online: true } });
+    } else {
+      user.freqIn = user.freqIn.filter((x) => x !== t.id);
+      t.freqOut = t.freqOut.filter((x) => x !== user.id);
+    }
+    save();
+    ack?.({ ok: true, ...socialSummary(user) });
+  }));
+  socket.on('friend:cancel', need(({ id } = {}, ack) => {
+    const t = db.users[id]; social(user);
+    user.freqOut = user.freqOut.filter((x) => x !== id);
+    if (t) social(t).freqIn = t.freqIn.filter((x) => x !== user.id);
+    save(); ack?.({ ok: true });
+  }));
+  socket.on('friend:remove', need(({ id } = {}, ack) => {
+    const t = db.users[id]; social(user);
+    user.friends = user.friends.filter((x) => x !== id); delete user.unread[id];
+    if (t) { social(t); t.friends = t.friends.filter((x) => x !== user.id); delete t.unread[user.id]; emitTo(t.id, 'friend:removed', { id: user.id }); }
+    save(); ack?.({ ok: true });
+  }));
+  socket.on('chat:history', need(async ({ id } = {}, ack) => {
+    const t = db.users[id];
+    if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Ihr seid keine Freunde.' });
+    try {
+      const msgs = await chatLoad(chatKey(user.id, id));
+      if (user.unread[id]) { delete user.unread[id]; save(); }
+      ack?.({ friend: friendInfo(user, t), msgs: msgs.slice(-100), ...socialSummary(user) });
+    } catch (e) { console.error(e); ack?.({ error: 'Chat konnte nicht geladen werden.' }); }
+  }));
+  socket.on('chat:read', need(({ id } = {}) => { if (social(user).unread[id]) { delete user.unread[id]; save(); } }));
+  const sent = [];
+  socket.on('chat:send', need(async ({ id, text } = {}, ack) => {
+    const t = db.users[id];
+    if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Du kannst nur Freunden schreiben.' });
+    const msg = String(text ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, CHAT_LEN);
+    if (!msg) return ack?.({ error: 'Leere Nachricht.' });
+    if (badChat(msg)) return ack?.({ error: 'Deine Nachricht enthält ein unerlaubtes Wort.' });
+    const now = Date.now();
+    while (sent.length && now - sent[0] > 10_000) sent.shift();
+    if (sent.length >= 8) return ack?.({ error: 'Nicht so schnell – warte kurz.' });
+    sent.push(now);
+    try {
+      const key = chatKey(user.id, id);
+      const msgs = [...await chatLoad(key), { from: user.id, text: msg, at: now }].slice(-CHAT_KEEP);
+      await chatStore(key, msgs);
+      social(t).unread[user.id] = (t.unread[user.id] || 0) + 1;
+      save();
+      const m = { from: user.id, text: msg, at: now };
+      emitTo(t.id, 'chat:msg', { from: { ...pub(user), online: true }, msg: m, ...socialSummary(t) });
+      ack?.({ msg: m });
+    } catch (e) { console.error(e); ack?.({ error: 'Nachricht konnte nicht gesendet werden.' }); }
+  }));
+  // Freund direkt zu einer Partie herausfordern
+  socket.on('friend:challenge', need(({ id } = {}, ack) => {
+    const t = db.users[id];
+    if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Nur Freunde kannst du so herausfordern.' });
+    if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
+    if (!online.has(t.id)) return ack?.({ error: `${t.name} ist gerade offline.` });
+    if (userGame.has(t.id) || fourBusy(t.id)) return ack?.({ error: `${t.name} spielt gerade.` });
+    const cid = crypto.randomUUID();
+    challenges.set(cid, { fromId: user.id, toId: t.id, timeMs: 600_000 });
+    setTimeout(() => challenges.delete(cid), 60_000);
+    emitTo(t.id, 'challenge:incoming', { id: cid, from: pub(user) });
+    ack?.({ ok: true });
+  }));
+
   socket.on('challenge:respond', need(({ id, accept } = {}) => {
     const ch = challenges.get(id);
     if (!ch || ch.toId !== user.id) return;
@@ -1287,6 +1444,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (!user || online.get(user.id) !== socket) return;
     online.delete(user.id);
+    notifyFriends(user, false);
     queue = queue.filter((q) => q.userId !== user.id);
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
     leaveLobby(user.id);
