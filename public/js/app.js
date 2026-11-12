@@ -10,6 +10,7 @@ import { burstAt, shakeBoard, checkFlash, confetti, coinRain, shatterPiece, prel
 import { FourBoard } from './fourboard.js';
 import { COLOR_NAMES, COLOR_HEX, TEAM_NAMES } from './four.js';
 import { pieceURL4 } from './pieces.js';
+import * as AX from './admin-extra.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -81,6 +82,7 @@ socket.on('connect', async () => {
   if (!r.token) return;
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
+  if (r.settings) applySettings(r.settings);
   if (r.ban !== undefined && JSON.stringify(r.ban) !== JSON.stringify(state.ban ?? null)) showBan(r.ban);
   if (r.social) { const firstTime = !state.social; setSocial(r.social); if (firstTime && r.social.requests) notify({ icon: '👋', title: `${r.social.requests} Freundschaftsanfrage${r.social.requests > 1 ? 'n' : ''}`, text: 'Schau unter „Freunde“ nach.', actions: [{ label: 'Ansehen', cls: 'primary', onClick: () => go('friends') }] }); if (firstTime && r.social.unread) notify({ icon: '💬', title: `${r.social.unread} ungelesene Nachricht${r.social.unread > 1 ? 'en' : ''}`, text: 'Deine Freunde haben dir geschrieben.', actions: [{ label: 'Lesen', cls: 'primary', onClick: () => go('friends') }] }); }
   if (state.game?.spectator && state.game.active) socket.emit('watch:start', { id: state.game.id }, (rr) => { if (rr?.error) { toast('Das Live-Match ist vorbei.', 'warn'); state.game = null; go('play'); } });
@@ -174,6 +176,54 @@ function setProfile(p, { coinsAnim = false } = {}) {
 }
 
 // ================================================================ Konto: Anmelden / Registrieren / Abmelden
+// ---------------------------------------------------------------- Server-Einstellungen (vom Admin): Banner, Münz-Event, Rabatt, Wartung
+function applySettings(st) {
+  const before = state.settings;
+  state.settings = st || {};
+  let bar = document.getElementById('event-banner');
+  const parts = [];
+  if (st.maintenance) parts.push(`🛠️ ${esc(st.maintenanceText || 'Wartungsarbeiten')}`);
+  if (st.coinMult > 1) parts.push(`🎉 Münz-Event: <b>×${st.coinMult}</b> Münzen${st.coinMultUntil ? ` bis ${new Date(st.coinMultUntil).toLocaleString('de-DE', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`);
+  if (st.shopDiscount > 0) parts.push(`🏷️ <b>−${st.shopDiscount} %</b> auf alles im Shop`);
+  if (st.banner) parts.push(`📣 ${esc(st.banner)}`);
+  if (!parts.length) { bar?.remove(); }
+  else {
+    if (!bar) { bar = document.createElement('div'); bar.id = 'event-banner'; bar.className = 'event-banner'; document.querySelector('.topbar').after(bar); }
+    bar.innerHTML = parts.map((x) => `<span>${x}</span>`).join('');
+    bar.classList.toggle('maint', !!st.maintenance);
+  }
+  if (before && JSON.stringify(before) !== JSON.stringify(st) && state.view === 'shop') renderShop();
+}
+const shopPrice = (n) => Math.round((n * (100 - (state.settings?.shopDiscount || 0))) / 100);
+const priceHTML = (n) => (state.settings?.shopDiscount > 0 && n > 0 ? `<span><s class="muted small">${fmtNum(n)}</s> ${coinHTML(shopPrice(n))}</span>` : coinHTML(n));
+socket.on('settings', applySettings);
+socket.on('server:reload', () => { state.updateTo = `${VERSION}-r${Date.now()}`; checkUpdate(); }); // lädt neu, sobald man nicht mitten im Spiel ist
+// Verwarnung vom Admin: großes Fenster, muss bestätigt werden
+socket.on('admin:warn', ({ text, by }) => {
+  sound.notify();
+  const ov = openOverlay(`<div class="result-head loss"><div class="result-icon">⚠️</div><h2>Verwarnung</h2><p class="muted">von ${esc(by)}</p></div>
+    <p style="text-align:center;font-size:17px">${esc(text)}</p><p class="muted small" style="text-align:center">Bei weiteren Verstößen kannst du gesperrt werden.</p>
+    <div class="modal-actions"><button class="btn primary" data-x>Verstanden</button></div>`, { closable: false });
+  $('[data-x]', ov.el).onclick = ov.close;
+});
+// Anti-Cheat-Alarm (nur Admins bekommen das)
+socket.on('admin:alert', ({ name, label, detail, score, id }) => {
+  if (!state.profile?.admin) return;
+  sound.notify();
+  notify({ icon: '🛡️', title: `Anti-Cheat: ${esc(name)} (${score} Punkte)`, text: `${esc(label)}<br><small class="muted">${esc(detail)}</small>`, timeout: 15000,
+    actions: [{ label: '🔎 Prüfen', cls: 'primary', onClick: () => { state.adminTab = 'anticheat'; go('admin'); } }, { label: '👤', onClick: () => openPlayerTab(id) }] });
+  updateAdminBadge();
+});
+async function updateAdminBadge() {
+  if (!state.profile?.admin) return;
+  const r = await emit('adm:openCases');
+  const btn = $('#admin-btn'); if (!btn) return;
+  btn.dataset.n = r.n || '';
+  btn.classList.toggle('has-cases', !!r.n);
+  btn.title = r.n ? `Admin-Menü – ${r.n} offene Anti-Cheat-Fälle` : 'Admin-Menü';
+}
+function openPlayerTab(q) { state.adminPlayer = q; renderAdmin('players'); }
+
 function renderFooter() {
   const p = state.profile;
   const acc = !p ? '' : p.registered
@@ -255,6 +305,8 @@ function renderAdminPlayers(box, query = '') {
     <div id="adm-player"></div></div>`;
   const ov = { el: box };
   const show = (pl) => {
+    state.adminPlayer = pl.code;
+    setTimeout(() => AX.playerExtras($('#adm-player', ov.el), pl.code), 0);
     $('#adm-player', ov.el).innerHTML = `<div class="adm-card">
       <div class="adm-who">${avatar(pl.avatar, 48)}<div><b>@${esc(pl.name)}</b> ${pl.online ? '<i class="dot"></i>' : ''}<div class="muted small">Code ${pl.code} · <b id="adm-elo">${pl.rating}</b> Elo</div></div>
         <span class="pill coin-pill"><i class="coin"></i><b id="adm-coins">${fmtNum(pl.coins)}</b></span></div>
@@ -319,7 +371,7 @@ function renderAdminPlayers(box, query = '') {
 }
 
 // ================================================================ Admin-Panel
-const ADMIN_TABS = [['overview', '📊 Übersicht'], ['matches', '♟️ Matches'], ['players', '👤 Spieler'], ['live', '🔴 Live'], ['announce', '📢 Ankündigung']];
+const ADMIN_TABS = [['overview', '📊 Übersicht'], ['anticheat', '🛡️ Anti-Cheat'], ['matches', '♟️ Matches'], ['players', '👤 Spieler'], ['live', '🔴 Live'], ['stats', '📈 Statistik'], ['events', '🎉 Events & Shop'], ['mod', '💬 Moderation'], ['log', '📜 Protokoll'], ['system', '⚙️ System'], ['announce', '📢 Ankündigung']];
 function renderAdmin(tab = state.adminTab || 'overview') {
   if (!state.profile?.admin) return go('play');
   state.adminTab = tab;
@@ -330,7 +382,10 @@ function renderAdmin(tab = state.adminTab || 'overview') {
     <div class="card adm-panel" id="adm-panel"><div class="muted">Lade…</div></div>`;
   $$('[data-atab]', root).forEach((b) => b.onclick = () => renderAdmin(b.dataset.atab));
   const box = $('#adm-panel');
-  ({ overview: adminOverview, matches: adminMatches, players: (el) => renderAdminPlayers(el, state.adminPlayer || ''), live: adminLive, announce: adminAnnounce })[tab](box);
+  if (!ADMIN_TABS.some(([k]) => k === tab)) tab = 'overview';
+  ({ overview: adminOverview, matches: adminMatches, players: (el) => renderAdminPlayers(el, state.adminPlayer || ''), live: adminLive, announce: adminAnnounce,
+    anticheat: (el) => AX.tabAntiCheat(el), stats: AX.tabStats, events: AX.tabEvents, mod: (el) => AX.tabModeration(el), log: AX.tabLog, system: AX.tabSystem })[tab](box);
+  updateAdminBadge();
 }
 async function adminOverview(box) {
   const r = await emit('admin:stats');
@@ -344,9 +399,14 @@ async function adminOverview(box) {
       ${tile(r.matches.total != null ? fmtNum(r.matches.total) : '–', 'Partien im Archiv', `${r.matches.today ?? '–'} heute`)}
       ${tile(fmtNum(r.coins), 'Münzen im Umlauf')}
       ${tile(r.banned, 'gesperrt')}
+      <div class="adm-tile clickable" data-goto="anticheat" id="ov-cases"><b>…</b><span>🛡️ offene Anti-Cheat-Fälle</span><small>ab 30 Punkten</small></div>
     </div>
     <div class="adm-tops"><div><h4>💰 Reichste Spieler</h4><ol class="adm-top">${top(r.topCoins, 'Münzen')}</ol></div><div><h4>🏆 Höchstes Elo</h4><ol class="adm-top">${top(r.topElo, 'Elo')}</ol></div></div>`;
   $$('li[data-uid]', box).forEach((li) => li.onclick = () => showPlayerProfile(li.dataset.uid));
+  const tiles = $$('.adm-tile', box);
+  [['players'], ['live'], ['live'], ['matches'], ['stats'], ['log']].forEach(([t], i) => { if (tiles[i]) { tiles[i].classList.add('clickable'); tiles[i].dataset.goto = t; } });
+  $$('[data-goto]', box).forEach((t) => t.onclick = () => renderAdmin(t.dataset.goto));
+  emit('adm:openCases').then((c) => { const el = $('#ov-cases b', box); if (el) el.textContent = c.n ?? '–'; });
 }
 const MATCH_ICON = { online: '⚔️', four: '👥', bot: '🤖' };
 function matchRow(m) {
@@ -492,6 +552,7 @@ async function adminLive(box) {
     ${r.two.length ? r.two.map((g) => `<div class="adm-match"><span class="am-icon">⚔️</span><span class="am-who"><b>${esc(g.players.w.name)}</b> <span class="muted">vs</span> <b>${esc(g.players.b.name)}</b></span><span class="am-res"><b>${src[g.source] || g.source}${g.variant === 'queens' ? ' · 👑' : ''}</b><small>${g.moves} Halbzüge · 👀 ${g.watchers}</small></span><button class="btn sm primary" data-watch-any="${esc(g.id)}">👀 Zuschauen</button></div>`).join('') : '<p class="muted">Keine normalen Partien.</p>'}
     ${r.four.length ? `<h4 class="adm-h">👥 4er-Schach</h4>${r.four.map((g) => `<div class="adm-match"><span class="am-icon">👥</span><span class="am-who">${g.players.map((p) => `<span class="${p.alive ? '' : 'muted'}">${p.bot ? '🤖' : ''}${esc(p.name)}${p.alive ? '' : ' ☠️'}</span>`).join(' · ')}</span><span class="am-res"><small>${g.ply} Halbzüge</small></span></div>`).join('')}` : ''}`;
   $('#al-refresh').onclick = () => adminLive(box);
+  AX.liveExtras(box);
   $$('[data-watch-any]', box).forEach((b) => b.onclick = () => watchGame(b.dataset.watchAny));
 }
 function adminAnnounce(box) {
@@ -1878,12 +1939,12 @@ function applyResync(d) {
 }
 
 socket.on('game:emote', ({ emote }) => showEmote(emote));
-socket.on('game:cancelled', () => {
+socket.on('game:cancelled', (d = {}) => {
   if (!state.game) return;
   clearWait();
   clearInterval(state.oppTimer); setBanner('');
   state.game.active = false; renderOnline();
-  toast('Die Partie wurde nach dem Update ohne Wertung beendet, weil dein Gegner nicht zurückkam.', 'warn');
+  toast(d.byAdmin ? '🛠️ Ein Admin hat die Partie ohne Wertung abgebrochen.' : 'Die Partie wurde nach dem Update ohne Wertung beendet, weil dein Gegner nicht zurückkam.', 'warn');
 });
 function showEmote(e) {
   const el = $('#emote-pop');
@@ -2093,7 +2154,7 @@ function startBot(id, { queens = false } = {}) {
   state.game = null;
   const startFen = queens ? queenFen(color) : null;
   state.lastQueens = queens;
-  state.bot = { bot, color, chess: startFen ? new Chess(startFen) : new Chess(), startFen, queens, moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId, training: !!state.training, eval: 0 };
+  state.bot = { bot, color, chess: startFen ? new Chess(startFen) : new Chess(), startFen, queens, moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId, training: !!state.training, eval: 0, startedAt: Date.now() };
   clearHint();
   const p = state.profile;
   setupBoardLook(p.equipped.board, mySkins(), color);
@@ -2202,7 +2263,7 @@ async function finishBot(resigned) {
   renderBotGame();
   setStatus(outcome === 'win' ? '🏆 Gewonnen!' : outcome === 'loss' ? '❌ Verloren' : '🤝 Remis');
   clearHint();
-  const req = s.training || s.queens ? Promise.resolve({ coins: 0 }) : emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned });
+  const req = s.training || s.queens ? Promise.resolve({ coins: 0 }) : emit('bot:finish', { botId: s.bot.id, color: s.color, moves: s.moves, resigned, startedAt: s.startedAt });
   if (reason === 'checkmate') {
     await mateFx();
     const { playFinisher } = await import('./finisher.js');
@@ -2233,7 +2294,7 @@ function renderShop() {
   if (tab === 'bundle') {
     // Pakete: Brett + Figuren + Finisher mit Rabatt
     for (const bd of BUNDLES) {
-      const { price, full, missing } = bundlePrice(bd, p.owned);
+      const bp0 = bundlePrice(bd, p.owned), full = bp0.full, missing = bp0.missing, price = shopPrice(bp0.price);
       const [[, bId], [, pId], [, fId]] = bd.items;
       const names = bd.items.map(([k, id]) => findItem(k, id)).map((it) => `<li>${esc(it.name)} <span class="muted">${fmtNum(it.price)}</span></li>`).join('');
       const card = html(`<div class="card shop-item bundle ${!missing.length ? 'equipped' : ''} ${bd.isNew ? 'ultra' : ''}">
@@ -2273,9 +2334,9 @@ function renderShop() {
       ${it.view3d ? '<span class="ribbon new">NEU · 3D</span>' : ''}
       <div class="prev"></div><h4>${it.icon && tab === 'shape' ? it.icon + ' ' : ''}${esc(it.name)}</h4><p>${esc(it.desc)}</p>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-        ${owned ? '<span class="muted" style="font-size:13px">✔ Freigeschaltet</span>' : it.price === 0 ? '<span class="muted">Gratis</span>' : coinHTML(it.price)}
+        ${owned ? '<span class="muted" style="font-size:13px">✔ Freigeschaltet</span>' : it.price === 0 ? '<span class="muted">Gratis</span>' : priceHTML(it.price)}
         ${equipped ? '<button class="btn sm" disabled>✓ Aktiv</button>' : owned ? '<button class="btn sm primary" data-eq>Ausrüsten</button>'
-          : `<button class="btn sm gold" data-buy ${p.coins < it.price ? 'disabled' : ''}>Kaufen</button>`}
+          : `<button class="btn sm gold" data-buy ${p.coins < shopPrice(it.price) ? 'disabled' : ''}>Kaufen</button>`}
       </div></div>`);
     const prev = $('.prev', card);
     if (tab === 'board') prev.appendChild(miniBoard(it.id, mySkins()));
@@ -2387,7 +2448,7 @@ function renderInventory() {
 
 function confirmBuy(kind, it) {
   const ov = openOverlay(`<h2>${esc(it.name)} kaufen?</h2><p class="muted">${esc(it.desc)}</p>
-    <div class="reward"><span class="pill coin-pill"><i class="coin"></i><b>${fmtNum(it.price)}</b></span></div>
+    <div class="reward"><span class="pill coin-pill"><i class="coin"></i><b>${fmtNum(shopPrice(it.price))}</b></span>${shopPrice(it.price) < it.price ? `<span class="pill"><s>${fmtNum(it.price)}</s>&nbsp;Rabatt</span>` : ''}</div>
     <div class="modal-actions"><button class="btn" data-x>Abbrechen</button><button class="btn gold" data-ok>Kaufen & ausrüsten</button></div>`);
   $('[data-x]', ov.el).onclick = ov.close;
   $('[data-ok]', ov.el).onclick = async () => {
@@ -2681,3 +2742,4 @@ function showChangelog() {
 $('#ver-pill').textContent = 'v' + VERSION;
 $('#ver-pill').onclick = (e) => { e.preventDefault(); e.stopPropagation(); showChangelog(); };
 renderFooter();
+AX.initAdminExtra({ $, $$, esc, emit, avatar, toast, openOverlay, confirmBox, fmtNum, timeAgo, openReplay, showPlayerProfile, watchGame, REASONS, openPlayerTab });

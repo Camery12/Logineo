@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.17.0';
+export const VERSION = '1.18.0';
 export const VERSION_DATE = '2026-11-12';
 export const CHANGELOG = [
+  ['1.18.0', 'Anti-Cheat gegen Elo-Farming, Zweitkonten, Bot-Farming und auffällige Zugzeiten; Admin-Panel mit 6 neuen Bereichen (Anti-Cheat, Statistik, Events & Shop, Moderation, Protokoll, System) und vielen neuen Spieler- und Live-Werkzeugen; Münz-Events, Shop-Rabatte und Banner'],
   ['1.17.0', 'Neuer Inventar-Tab: alle deine Bretter, Figuren, Formen und Finisher an einem Ort – mit Vorschau, Suche und Ausrüsten per Klick'],
   ['1.16.1', '3D-Brett im Finisher-Look: dunkle Bühne mit Spotlicht, Leuchten, dicker Rahmen mit Goldeinlage, große glänzende Figuren'],
   ['1.16.0', 'Mit den 3D-Figuren spielst du jetzt auf einem echten 3D-Brett: 3D-Figuren, 3D-Brett mit Rahmen und Schatten, gleitende Züge, umschaltbar 2D/3D'],

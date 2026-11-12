@@ -1028,3 +1028,68 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .inv-item .inv-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .inv-locked { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; padding: 14px 16px; border-radius: 14px; background: rgba(255, 255, 255, .03); border: 1px dashed var(--line); color: var(--muted); }
 @media (max-width: 760px) { .inv-hero { grid-template-columns: 1fr; } .inv-look { max-width: 260px; justify-self: center; width: 100%; } .inv-search { flex: 1; min-width: 0; } }
+
+/* ================================================================ 1.16: Anti-Cheat & erweitertes Admin-Panel */
+.event-banner { position: relative; z-index: 5; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 22px; padding: 8px 14px; font-size: 14px; text-align: center;
+  background: linear-gradient(90deg, rgba(124, 92, 255, .9), rgba(34, 211, 238, .85)); color: #fff; box-shadow: 0 6px 20px -8px rgba(0, 0, 0, .6); }
+.event-banner.maint { background: linear-gradient(90deg, #b45309, #f59e0b); }
+#admin-btn.has-cases { position: relative; box-shadow: 0 0 0 2px #ff2d55; }
+#admin-btn.has-cases::after { content: attr(data-n); position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 99px; background: #ff2d55; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+.adm-tabs { flex-wrap: wrap; }
+.adm-tile.clickable { cursor: pointer; transition: transform .15s; }
+.adm-tile.clickable:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1px var(--accent); }
+.ax-sub { margin-bottom: 14px; flex-wrap: wrap; }
+.ax-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px 22px; }
+.ax-panel { padding: 14px; border-radius: 14px; background: rgba(255, 255, 255, .03); border: 1px solid var(--line); display: grid; gap: 10px; align-content: start; }
+.ax-panel h4 { margin: 0; }
+.ax-panel p { margin: 0; }
+.ax-inline { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; margin-right: 8px; }
+.ax-score { display: inline-flex; align-items: center; gap: 6px; min-width: 90px; }
+.ax-score i { position: relative; flex: 1; height: 7px; border-radius: 99px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.ax-score i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: inherit; background: var(--c, #10b981); }
+.ax-score.mid { --c: #f59e0b; } .ax-score.hi { --c: #ff2d55; }
+.ax-score b { font-size: 12px; }
+.ax-cases { display: grid; gap: 12px; }
+.ax-case { padding: 14px; border-radius: 14px; background: rgba(255, 255, 255, .035); border: 1px solid var(--line); display: grid; gap: 10px; }
+.ax-case-head { display: grid; grid-template-columns: auto 1fr minmax(120px, 200px); gap: 12px; align-items: center; }
+.ax-flags, .ax-mini { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.ax-flags li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: rgba(255, 45, 85, .08); }
+.ax-flags li span { flex: 1; }
+.ax-flags li small, .ax-mini small { color: var(--muted); font-size: 11px; }
+.ax-flags li.done, .ax-mini li.done { opacity: .45; text-decoration: line-through; background: transparent; }
+.ax-mini li { padding: 4px 6px; border-radius: 6px; }
+.ax-mini li.clickable { cursor: pointer; } .ax-mini li.clickable:hover { background: rgba(124, 92, 255, .12); }
+.ax-note { flex: 1; }
+.ax-hot td { background: rgba(255, 45, 85, .08); }
+.ax-ipgroup { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-radius: 12px; background: rgba(255, 255, 255, .03); margin-bottom: 8px; }
+.ax-toggle { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; cursor: pointer; }
+.ax-toggle input { display: none; }
+.ax-sw { flex: none; width: 38px; height: 22px; border-radius: 99px; background: rgba(255, 255, 255, .12); position: relative; transition: .2s; margin-top: 1px; }
+.ax-sw::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .2s; }
+.ax-toggle input:checked + .ax-sw { background: var(--good, #10b981); }
+.ax-toggle input:checked + .ax-sw::after { transform: translateX(16px); }
+.ax-toggle b { display: block; font-size: 14px; } .ax-toggle small { display: block; color: var(--muted); font-size: 12px; }
+.ax-bars { display: grid; gap: 5px; }
+.ax-bar { display: grid; grid-template-columns: minmax(90px, 40%) 1fr auto; gap: 8px; align-items: center; font-size: 13px; }
+.ax-bl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-bar i { height: 10px; border-radius: 99px; background: rgba(255, 255, 255, .06); position: relative; overflow: hidden; }
+.ax-bar i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); background: var(--c); border-radius: inherit; }
+.ax-cols { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; height: 150px; align-items: end; }
+.ax-col { display: grid; grid-template-rows: 1fr auto auto; height: 100%; text-align: center; font-size: 10px; color: var(--muted); }
+.ax-col i { align-self: end; height: var(--h); min-height: 2px; border-radius: 5px 5px 2px 2px; background: var(--grad); }
+.ax-col b { color: var(--text); font-size: 11px; }
+.ax-player { margin-top: 12px; display: grid; gap: 6px; }
+.ax-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; }
+.ax-live { padding: 8px 10px; border-radius: 10px; background: rgba(255, 45, 85, .1); }
+.ax-inv { display: grid; gap: 8px; }
+.ax-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.ax-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 99px; background: rgba(255, 255, 255, .06); font-size: 12px; color: var(--text); }
+.ax-chip.on { box-shadow: inset 0 0 0 1px var(--good, #10b981); }
+.ax-chip button { color: var(--bad, #ff2d55); font-weight: 800; padding: 0 2px; }
+.ax-chat { display: grid; gap: 4px; max-height: 60vh; overflow: auto; padding: 4px; }
+.ax-msg { padding: 6px 10px; border-radius: 10px; background: rgba(255, 255, 255, .05); font-size: 14px; }
+.ax-msg small { display: block; color: var(--muted); font-size: 10px; }
+@media (max-width: 600px) { .ax-case-head { grid-template-columns: auto 1fr; } .ax-case-head .ax-score { grid-column: 1 / -1; } }
+.ax-panel .adm-row, .ax-panel .adm-quick { flex-wrap: wrap; }
+.ax-panel .adm-row input { min-width: 0; flex: 1 1 140px; }
+.ax-panel .field input { width: 100%; }

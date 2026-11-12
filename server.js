@@ -11,6 +11,7 @@ import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, pieceLook, AVATAR_EMOJIS
 import { checkUsername, badWord, badChat } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
+import { setupAdmin } from './server-admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -154,7 +155,7 @@ function createUser() {
     code,
     name: freeGuestName(),
     avatar: { type: 'emoji', value: pick(AVATAR_EMOJIS), color: pick(AVATAR_COLORS) },
-    coins: REWARDS.start,
+    coins: adminApi.startCoins(REWARDS.start),
     rating: 0,
     eloV2: true,
     stats: { games: 0, wins: 0, losses: 0, draws: 0, botWins: 0, botGames: 0, mates: 0 },
@@ -447,12 +448,13 @@ function endGame(g, result, reason) {
   const winner = result === 'w' ? W : result === 'b' ? B : null;
   const finisher = reason === 'checkmate' && winner ? winner.equipped.finisher : null;
   const plies = g.chess.history().length;
-  const unrated = fairPlay(g, result, reason);
+  const unrated = fairPlay(g, result, reason) || (reason === 'abandon' ? null : adminApi.precheck(W, B, result));
+  const rBefore = { w: W.rating, b: B.rating };
   if (unrated) console.log(`⚖️ nicht gewertet (${W.name} – ${B.name}): ${unrated}`);
   for (const [u, color, d0, opp] of [[W, 'w', dW, B], [B, 'b', dB, W]]) {
     const outcome = result === 'draw' ? 'draw' : result === color ? 'win' : 'loss';
     let d = g.variant ? 0 : d0; // Spaß-Varianten (Queen-Modus) zählen nicht für Elo
-    let coins = outcome === 'win' ? REWARDS.win : outcome === 'draw' ? REWARDS.draw : REWARDS.loss;
+    let coins = adminApi.coins(outcome === 'win' ? REWARDS.win : outcome === 'draw' ? REWARDS.draw : REWARDS.loss);
     if (unrated) { d = 0; coins = 0; }
     if (reason === 'abandon') {
       // Verlassen: wer geht, verliert Elo (keine Münzen) – wer bleibt, bekommt nichts (keine Änderung)
@@ -468,7 +470,7 @@ function endGame(g, result, reason) {
     }
     if (outcome === 'win' && reason === 'checkmate' && !unrated) u.stats.mates++;
     ensureVs(u);
-    const hEntry = { type: 'online', matchId: g.id, opponent: opp.name, oppId: opp.id, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now(), ...(unrated ? { unrated } : {}), ...(g.variant ? { variant: g.variant } : {}) };
+    const hEntry = { type: 'online', matchId: g.id, myRating: rBefore[color], oppRating: rBefore[color === 'w' ? 'b' : 'w'], opponent: opp.name, oppId: opp.id, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now(), ...(unrated ? { unrated } : {}), ...(g.variant ? { variant: g.variant } : {}) };
     addVs(u, hEntry);
     u.history.unshift(hEntry);
     u.history = u.history.slice(0, 50);
@@ -478,6 +480,7 @@ function endGame(g, result, reason) {
       skins: { w: pieceLook(W.equipped), b: pieceLook(B.equipped) }, profile: priv(u),
     });
   }
+  try { adminApi.afterOnline(g, result, W, B); } catch (e) { console.error('Anti-Cheat:', e.message); }
   archiveMatch({
     id: g.id, type: 'online', source: g.source, variant: g.variant || null, startFen: g.startFen || null, at: Date.now(), startedAt: g.createdAt || null,
     timeMs: g.timeMs, board: g.board, result, reason, unrated: unrated || null, plies, moves: g.chess.history(),
@@ -698,7 +701,7 @@ function endFour(g) {
     const unrated = g.state.ply < 16 ? 'Zu kurz – die Partie hatte zu wenige Züge.' : g.moves[c] < 3 ? 'Du hast weniger als 3 Züge gemacht.' : null;
     const pl = placeOf(c, place), won = pl === 1;
     const base = teams ? TEAM_REWARDS[won ? 0 : 1] : FOUR_REWARDS[place];
-    const coins = unrated ? 0 : Math.round((base * factor) / 5) * 5;
+    const coins = unrated ? 0 : adminApi.coins(Math.round((base * factor) / 5) * 5);
     u.coins += coins;
     const sk = teams ? 'teams' : 'four';
     if (!unrated) { u.stats[sk] ||= { games: 0, wins: 0 }; u.stats[sk].games++; if (won) u.stats[sk].wins++; }
@@ -707,6 +710,7 @@ function endFour(g) {
     u.history = u.history.slice(0, 50);
     emitTo(uid, 'four:over', { ...fourPayload(g, uid), ranking: table, place: pl, coins, unrated, profile: priv(u), bots: 4 - g.humans, matchId: g.id });
   }
+  try { adminApi.afterFour(g); } catch (e) { console.error('Anti-Cheat:', e.message); }
   archiveMatch({
     id: g.id, type: 'four', teams, winTeam, at: Date.now(), timeMs: g.timeMs, humans: g.humans, plies: g.state.ply, log: g.log || [],
     uids: g.players.filter((p) => p.uid).map((p) => p.uid),
@@ -951,6 +955,40 @@ function banErr(u) {
   return `⛔ Du bist ${bis} gesperrt${b.reason ? ` (${b.reason})` : ''}. Bots und Training gehen weiter.`;
 }
 
+// Partie annullieren: Elo, Münzen und Statistik bei allen Beteiligten zurücknehmen
+async function annulMatch(m, byName) {
+  const touched = [];
+  const revert = (uid, { d = 0, coins = 0 } = {}, statsFn) => {
+    const u = db.users[uid]; if (!u) return;
+    u.rating = Math.max(0, u.rating - d); u.coins = Math.max(0, u.coins - coins);
+    statsFn?.(u);
+    touched.push({ u, d, coins });
+  };
+  if (m.type === 'online') {
+    for (const pl of Object.values(m.players || {})) revert(pl.id, pl, (u) => {
+      if (!pl.counted) return;
+      u.stats.games = Math.max(0, u.stats.games - 1);
+      const k = pl.outcome === 'win' ? 'wins' : pl.outcome === 'loss' ? 'losses' : 'draws';
+      u.stats[k] = Math.max(0, u.stats[k] - 1);
+      if (pl.mate) u.stats.mates = Math.max(0, u.stats.mates - 1);
+    });
+  } else if (m.type === 'four') {
+    for (const pl of m.players || []) if (pl.uid) revert(pl.uid, { coins: pl.coins || 0 }, (u) => { if (pl.counted && u.stats.four) { u.stats.four.games = Math.max(0, u.stats.four.games - 1); if (pl.win) u.stats.four.wins = Math.max(0, u.stats.four.wins - 1); } });
+  } else if (m.type === 'bot') {
+    const pl = m.players.user;
+    revert(pl.id, { coins: pl.coins || 0 }, (u) => { u.stats.botGames = Math.max(0, u.stats.botGames - 1); if (pl.outcome === 'win') { u.stats.botWins = Math.max(0, u.stats.botWins - 1); u.stats.mates = Math.max(0, u.stats.mates - 1); } });
+  }
+  m.annulled = { at: Date.now(), by: byName };
+  await matchUpdate(m);
+  save();
+  for (const t of touched) {
+    emitTo(t.u.id, 'profile:refresh', { profile: priv(t.u) });
+    if (t.d || t.coins) emitTo(t.u.id, 'toast', { type: 'warn', text: `⚖️ Ein Admin hat eine Partie annulliert: ${t.d ? `${t.d > 0 ? '−' : '+'}${Math.abs(t.d)} Elo` : ''}${t.d && t.coins ? ', ' : ''}${t.coins ? `${t.coins > 0 ? '−' : '+'}${Math.abs(t.coins)} Münzen` : ''}.` });
+  }
+  console.log(`[admin] ${byName} hat Partie ${m.id} (${m.type}) annulliert`);
+  return touched;
+}
+
 // ---------------------------------------------------------------- Freunde & Chat
 const MAX_FRIENDS = 200, CHAT_KEEP = 200, CHAT_LEN = 300;
 const social = (u) => { u.friends ||= []; u.freqIn ||= []; u.freqOut ||= []; u.unread ||= {}; return u; };
@@ -1039,6 +1077,47 @@ const ALLOWED_TIMES = [0, 60_000, 180_000, 300_000, 600_000, 900_000];
 const pickTime = (t, fallback = 600_000) => (ALLOWED_TIMES.includes(t) ? t : fallback);
 const RANDOM_TIMES = [60_000, 180_000, 300_000, 600_000, 900_000]; // Zufallsmatch: immer mit Uhr
 
+// Spieler per 8-stelligem Code, Name oder ID finden (Admin)
+function findTarget(q) {
+  const s = String(q || '').trim();
+  if (/^\d{8}$/.test(s)) return byCode.get(s) || null;
+  return db.users[s] || byName.get(nameKey(s.replace(/^@/, ''))) || null;
+}
+// Partie ohne Wertung abbrechen (Admin)
+function abortGame(g) {
+  if (g.status === 'over') return;
+  g.status = 'over';
+  clearTimeout(g.voteTimer);
+  for (const t of Object.values(g.disconnect)) clearTimeout(t);
+  for (const c of ['w', 'b']) { emitTo(g.players[c], 'game:cancelled', { byAdmin: true }); userGame.delete(g.players[c]); }
+  io.to(watchRoom(g)).emit('toast', { type: 'warn', text: 'Die Partie wurde von einem Admin abgebrochen.' });
+  unpersistGame(g);
+  setTimeout(() => games.delete(g.id), 5000);
+  broadcastStats();
+}
+function abortFour(g) {
+  g.status = 'over';
+  clearTimeout(g.botTimer);
+  for (const t of Object.values(g.disconnect)) clearTimeout(t);
+  for (const p of g.players) if (p.uid) { emitTo(p.uid, 'toast', { type: 'warn', text: 'Das Spiel wurde von einem Admin abgebrochen (ohne Wertung).' }); emitTo(p.uid, 'four:lobby', { closed: true, started: true }); if (userFour.get(p.uid) === g.id) userFour.delete(p.uid); }
+  setTimeout(() => games4.delete(g.id), 5000);
+  broadcastStats();
+}
+function forceName(u, name) {
+  const n = name ? clean(name, 16) : freeGuestName();
+  const err = checkUsername(n);
+  if (err) return { error: err };
+  const other = byName.get(nameKey(n));
+  if (other && other !== u) return { error: 'Dieser Benutzername ist schon vergeben.' };
+  setName(u, n);
+  return { ok: true };
+}
+const adminApi = setupAdmin({
+  getDb: () => db, online, games, games4, lobbies4, rooms, io, save, flush, emitTo, pub, priv, isAdmin, banInfo, findTarget, matchList, matchGet, annulMatch,
+  chatLoad, chatStore, groupDelete, groupSave, setName, hashPw, VERSION, mongo: () => !!mongoUsers, endGame, abortGame, abortFour, forceName,
+  getQueue: () => queue, setQueue: (q) => { queue = q; broadcastStats(); },
+});
+
 io.on('connection', (socket) => {
   let user = null;
   // letztes Lebenszeichen (auch Ping-Antworten) – für faire Uhr bei Verbindungsabbruch
@@ -1054,7 +1133,8 @@ io.on('connection', (socket) => {
     const old = online.get(user.id);
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
-    ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, social: socialSummary(user), ban: banInfo(user) });
+    adminApi.onConnect(socket, user);
+    ack?.({ settings: adminApi.publicSettings(), token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, social: socialSummary(user), ban: banInfo(user) });
     notifyFriends(user, true);
     // Laufendes 4er-Spiel fortsetzen
     const g4 = fourGameOf(user.id);
@@ -1101,8 +1181,9 @@ io.on('connection', (socket) => {
     const item = findItem(kind, id);
     if (!item) return ack?.({ error: 'Unbekannter Artikel.' });
     if (user.owned[kind].includes(id)) return ack?.({ error: 'Schon in deinem Besitz.' });
-    if (user.coins < item.price) return ack?.({ error: `Dir fehlen ${item.price - user.coins} Münzen.` });
-    user.coins -= item.price; user.owned[kind].push(id); user.equipped[kind] = id;
+    const cost = adminApi.price(item.price);
+    if (user.coins < cost) return ack?.({ error: `Dir fehlen ${cost - user.coins} Münzen.` });
+    user.coins -= cost; user.owned[kind].push(id); user.equipped[kind] = id;
     save(); ack?.({ profile: priv(user) });
   }));
 
@@ -1115,7 +1196,7 @@ io.on('connection', (socket) => {
   socket.on('shop:bundle', need(({ id } = {}, ack) => {
     const bundle = BUNDLES.find((b) => b.id === id);
     if (!bundle) return ack?.({ error: 'Unbekanntes Paket.' });
-    const { price, missing } = bundlePrice(bundle, user.owned);
+    const bp = bundlePrice(bundle, user.owned), missing = bp.missing, price = adminApi.price(bp.price);
     if (!missing.length) return ack?.({ error: 'Du besitzt schon alles aus diesem Paket.' });
     if (user.coins < price) return ack?.({ error: `Dir fehlen ${price - user.coins} Münzen.` });
     user.coins -= price;
@@ -1166,11 +1247,7 @@ io.on('connection', (socket) => {
 
   // --- Profil eines anderen Spielers ansehen
   // --- Admin-Menü: Spieler suchen und Münzen geben/abziehen (nur für Admins, Server prüft jedes Mal)
-  const findTarget = (q) => {
-    const s = String(q || '').trim();
-    if (/^\d{8}$/.test(s)) return byCode.get(s) || null;
-    return byName.get(nameKey(s.replace(/^@/, ''))) || null;
-  };
+  adminApi.register(socket, () => user, need);
   socket.on('admin:find', need(({ query } = {}, ack) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
     const t = findTarget(query);
@@ -1212,35 +1289,8 @@ io.on('connection', (socket) => {
     const m = await matchGet(String(id || ''));
     if (!m) return ack?.({ error: 'Partie nicht gefunden.' });
     if (m.annulled) return ack?.({ error: 'Diese Partie wurde schon annulliert.' });
-    const touched = [];
-    const revert = (uid, { d = 0, coins = 0 } = {}, statsFn) => {
-      const u = db.users[uid]; if (!u) return;
-      u.rating = Math.max(0, u.rating - d); u.coins = Math.max(0, u.coins - coins);
-      statsFn?.(u);
-      touched.push({ u, d, coins });
-    };
-    if (m.type === 'online') {
-      for (const pl of Object.values(m.players || {})) revert(pl.id, pl, (u) => {
-        if (!pl.counted) return;
-        u.stats.games = Math.max(0, u.stats.games - 1);
-        const k = pl.outcome === 'win' ? 'wins' : pl.outcome === 'loss' ? 'losses' : 'draws';
-        u.stats[k] = Math.max(0, u.stats[k] - 1);
-        if (pl.mate) u.stats.mates = Math.max(0, u.stats.mates - 1);
-      });
-    } else if (m.type === 'four') {
-      for (const pl of m.players || []) if (pl.uid) revert(pl.uid, { coins: pl.coins || 0 }, (u) => { if (pl.counted && u.stats.four) { u.stats.four.games = Math.max(0, u.stats.four.games - 1); if (pl.win) u.stats.four.wins = Math.max(0, u.stats.four.wins - 1); } });
-    } else if (m.type === 'bot') {
-      const pl = m.players.user;
-      revert(pl.id, { coins: pl.coins || 0 }, (u) => { u.stats.botGames = Math.max(0, u.stats.botGames - 1); if (pl.outcome === 'win') { u.stats.botWins = Math.max(0, u.stats.botWins - 1); u.stats.mates = Math.max(0, u.stats.mates - 1); } });
-    }
-    m.annulled = { at: Date.now(), by: user.name };
-    await matchUpdate(m);
-    save();
-    for (const t of touched) {
-      emitTo(t.u.id, 'profile:refresh', { profile: priv(t.u) });
-      if (t.d || t.coins) emitTo(t.u.id, 'toast', { type: 'warn', text: `⚖️ Ein Admin hat eine Partie annulliert: ${t.d ? `${t.d > 0 ? '−' : '+'}${Math.abs(t.d)} Elo` : ''}${t.d && t.coins ? ', ' : ''}${t.coins ? `${t.coins > 0 ? '−' : '+'}${Math.abs(t.coins)} Münzen` : ''}.` });
-    }
-    console.log(`[admin] ${user.name} hat Partie ${m.id} (${m.type}) annulliert`);
+    await annulMatch(m, user.name);
+    adminApi.log(user, 'annul', null, `Partie ${m.id} (${m.type})`);
     ack?.({ ok: true, match: m });
   }));
   socket.on('admin:ban', adminOnly(async ({ query, minutes = 60, reason = '' } = {}, ack) => {
@@ -1253,6 +1303,7 @@ io.on('connection', (socket) => {
     save();
     emitTo(t.id, 'banned', banInfo(t));
     console.log(`[admin] ${user.name} sperrt ${t.name} (${mins > 0 ? mins + ' Min' : 'dauerhaft'})`);
+    adminApi.log(user, 'ban', t, `${minutes ? minutes + ' Min.' : 'dauerhaft'}${reason ? ' – ' + reason : ''}`);
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id), ban: banInfo(t) } });
   }));
   socket.on('admin:unban', adminOnly(async ({ query } = {}, ack) => {
@@ -1261,6 +1312,7 @@ io.on('connection', (socket) => {
     delete t.ban; save();
     emitTo(t.id, 'banned', null);
     emitTo(t.id, 'toast', { type: 'good', text: '✅ Deine Sperre wurde aufgehoben.' });
+    adminApi.log(user, 'unban', t);
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id), ban: null } });
   }));
   socket.on('admin:announce', adminOnly(async ({ text } = {}, ack) => {
@@ -1268,6 +1320,7 @@ io.on('connection', (socket) => {
     if (!msg) return ack?.({ error: 'Leere Ankündigung.' });
     io.emit('announce', { text: msg, by: user.name, at: Date.now() });
     console.log(`[admin] Ankündigung von ${user.name}: ${msg}`);
+    adminApi.log(user, 'announce', null, text);
     ack?.({ ok: true, reached: online.size });
   }));
   socket.on('admin:live', adminOnly(async (_, ack) => {
@@ -1297,6 +1350,7 @@ io.on('connection', (socket) => {
     t.music = null; t.custom = { ...customOf(t), bio: '', bannerImg: null, banner: customOf(t).banner === 'bild' ? 'standard' : customOf(t).banner };
     console.log(`[admin] ${user.name} hat Song/Banner/Bio von ${t.name} (${t.code}) entfernt`);
     save(); emitTo(t.id, 'profile:refresh', { profile: priv(t) });
+    adminApi.log(user, 'clear-profile', t, 'Song, Banner & Bio entfernt');
     ack?.({ ok: true });
   }));
   socket.on('admin:coins', need(({ query, amount } = {}, ack) => {
@@ -1311,6 +1365,7 @@ io.on('connection', (socket) => {
     // Empfänger sieht es sofort, falls online
     emitTo(t.id, 'profile:refresh', { profile: priv(t) });
     emitTo(t.id, 'toast', { type: 'good', text: n > 0 ? `🎁 Du hast ${n} Münzen von einem Admin bekommen!` : `Ein Admin hat ${-n} Münzen abgezogen.` });
+    adminApi.log(user, 'coins', t, `${amount > 0 ? '+' : ''}${amount} Münzen`);
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) }, profile: t === user ? priv(user) : undefined });
   }));
 
@@ -1334,6 +1389,7 @@ io.on('connection', (socket) => {
     save();
     emitTo(t.id, 'profile:refresh', { profile: priv(t) });
     if (d) emitTo(t.id, 'toast', { type: d > 0 ? 'good' : 'warn', text: d > 0 ? `🏆 Ein Admin hat dir ${d} Elo gegeben! (jetzt ${t.rating})` : `Ein Admin hat dir ${-d} Elo abgezogen (jetzt ${t.rating}).` });
+    adminApi.log(user, 'elo', t, `${d >= 0 ? '+' : ''}${d} Elo (jetzt ${t.rating})`);
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) }, change: d, profile: t === user ? priv(user) : undefined });
   }));
 
@@ -1393,6 +1449,7 @@ io.on('connection', (socket) => {
 
   // --- Einladungscode (6-stellig, zufällig)
   socket.on('room:create', need(({ timeMs = 600_000, variant = null } = {}, ack) => {
+    { const blk = adminApi.playBlock('play'); if (blk) return ack?.({ error: blk }); }
     if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
@@ -1422,6 +1479,7 @@ io.on('connection', (socket) => {
 
   // --- 4er-Schach
   socket.on('four:create', need(({ timeMs = 300_000, teams = false } = {}, ack) => {
+    { const blk = adminApi.playBlock('four'); if (blk) return ack?.({ error: blk }); }
     ack?.(createFourLobby(user, timeMs, teams));
   }));
   // 2 vs 2: Team wechseln (wenn dort noch Platz ist)
@@ -1442,6 +1500,7 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
   }));
   socket.on('four:solo', need(({ timeMs = 300_000, teams = false } = {}, ack) => {
+    { const blk = adminApi.playBlock('four'); if (blk) return ack?.({ error: blk }); }
     if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
     startFour([user.id], fourTime(timeMs), { teams: !!teams, side: { [user.id]: 0 } });
@@ -1470,6 +1529,7 @@ io.on('connection', (socket) => {
   socket.on('room:cancel', need(() => { for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c); }));
 
   socket.on('code:join', need(({ code, timeMs } = {}, ack) => {
+    { const blk = adminApi.playBlock('play'); if (blk) return ack?.({ error: blk }); }
     if (banErr(user)) return ack?.({ error: banErr(user) });
     code = String(code || '').replace(/\D/g, '');
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
@@ -1587,9 +1647,10 @@ io.on('connection', (socket) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     const t = db.users[id];
     if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Du kannst nur Freunden schreiben.' });
+    { const blk = adminApi.chatBlock(user); if (blk) return ack?.({ error: blk }); }
     const msg = String(text ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, CHAT_LEN);
     if (!msg) return ack?.({ error: 'Leere Nachricht.' });
-    if (badChat(msg)) return ack?.({ error: 'Deine Nachricht enthält ein unerlaubtes Wort.' });
+    if (badChat(msg)) { adminApi.blockedChat(user, msg, 'chat'); return ack?.({ error: 'Deine Nachricht enthält ein unerlaubtes Wort.' }); }
     const now = Date.now();
     while (sent.length && now - sent[0] > 10_000) sent.shift();
     if (sent.length >= 8) return ack?.({ error: 'Nicht so schnell – warte kurz.' });
@@ -1655,9 +1716,10 @@ io.on('connection', (socket) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     const gr = groupOf(id);
     if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    { const blk = adminApi.chatBlock(user); if (blk) return ack?.({ error: blk }); }
     const msg = String(text ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, CHAT_LEN);
     if (!msg) return ack?.({ error: 'Leere Nachricht.' });
-    if (badChat(msg)) return ack?.({ error: 'Deine Nachricht enthält ein unerlaubtes Wort.' });
+    if (badChat(msg)) { adminApi.blockedChat(user, msg, 'chat'); return ack?.({ error: 'Deine Nachricht enthält ein unerlaubtes Wort.' }); }
     const now = Date.now();
     while (sent.length && now - sent[0] > 10_000) sent.shift();
     if (sent.length >= 8) return ack?.({ error: 'Nicht so schnell – warte kurz.' });
@@ -1702,6 +1764,7 @@ io.on('connection', (socket) => {
   }));
   // Aus der Gruppe heraus eine 2-vs-2- oder 4er-Lobby öffnen und alle einladen
   socket.on('group:play', need(async ({ id, teams = true, timeMs = 300_000 } = {}, ack) => {
+    { const blk = adminApi.playBlock('four'); if (blk) return ack?.({ error: blk }); }
     const gr = groupOf(id);
     if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
     const r = createFourLobby(user, timeMs, teams);
@@ -1714,6 +1777,7 @@ io.on('connection', (socket) => {
 
   // Freund direkt zu einer Partie herausfordern
   socket.on('friend:challenge', need(({ id, timeMs } = {}, ack) => {
+    { const blk = adminApi.playBlock('play'); if (blk) return ack?.({ error: blk }); }
     if (banErr(user)) return ack?.({ error: banErr(user) });
     const t = db.users[id];
     if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Nur Freunde kannst du so herausfordern.' });
@@ -1739,6 +1803,7 @@ io.on('connection', (socket) => {
 
   // --- Zufälliges Match
   socket.on('queue:join', need(({ timeMs } = {}, ack) => {
+    { const blk = adminApi.playBlock('random'); if (blk) return ack?.({ error: blk }); }
     if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     const t = RANDOM_TIMES.includes(timeMs) ? timeMs : 600_000;
@@ -1817,7 +1882,7 @@ io.on('connection', (socket) => {
   }));
 
   // --- Bot-Ergebnisse (serverseitig nachgespielt)
-  socket.on('bot:finish', need(({ botId, color, moves, resigned } = {}, ack) => {
+  socket.on('bot:finish', need(({ botId, color, moves, resigned, startedAt } = {}, ack) => {
     const bot = BOTS.find((b) => b.id === botId);
     if (!bot || !['w', 'b'].includes(color) || !Array.isArray(moves) || moves.length > 600) return ack?.({ error: 'Ungültig.' });
     const now = Date.now();
@@ -1834,6 +1899,7 @@ io.on('connection', (socket) => {
     if (outcome === 'win') coins = bot.reward;
     else if (outcome === 'draw') coins = Math.round(bot.reward / 3);
     else if (moves.length >= 10) coins = REWARDS.botLoss;
+    coins = adminApi.coins(coins);
     user.lastBotAt = now;
     user.coins += coins;
     user.stats.botGames++;
@@ -1843,6 +1909,7 @@ io.on('connection', (socket) => {
     addVs(user, hEntry);
     user.history.unshift(hEntry);
     user.history = user.history.slice(0, 50);
+    try { adminApi.afterBot(user, bot, outcome, moves.length, Number.isFinite(startedAt) && startedAt < now ? startedAt : null); } catch (e) { console.error('Anti-Cheat:', e.message); }
     save();
     archiveMatch({
       id: matchId, type: 'bot', at: now, uids: [user.id], moves: moves.map((m) => ({ from: m.from, to: m.to, promotion: m.promotion })),
@@ -1861,6 +1928,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (!user || online.get(user.id) !== socket) return;
     online.delete(user.id);
+    adminApi.onDisconnect(user);
     notifyFriends(user, false);
     queue = queue.filter((q) => q.userId !== user.id);
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
@@ -1891,4 +1959,5 @@ try {
 }
 for (const u of Object.values(db.users)) { byToken.set(u.token, u); byCode.set(u.code, u); }
 migrateUsers();
+await adminApi.init();
 server.listen(PORT, () => console.log(`♞ SchachArena läuft auf http://localhost:${PORT}`));
