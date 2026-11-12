@@ -76,6 +76,7 @@ socket.on('connect', async () => {
   if (!r.token) return;
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
+  if (state.game?.spectator && state.game.active) socket.emit('watch:start', { id: state.game.id }, (rr) => { if (rr?.error) { toast('Das Live-Match ist vorbei.', 'warn'); state.game = null; go('play'); } });
   if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
   if (!state.booted) {
     state.booted = true; renderAll(); go(location.hash.slice(1) || 'play'); warmFinisherLater();
@@ -87,7 +88,7 @@ socket.on('connect', async () => {
     }
   }
   // Laufende Partie gibt es auf dem Server nicht mehr (sollte praktisch nie passieren)
-  if (state.game?.active && r.gameId !== state.game.id) {
+  if (state.game?.active && !state.game.spectator && r.gameId !== state.game.id) {
     state.game.active = false; clearInterval(state.oppTimer); setBanner(''); renderOnline();
     toast('Die Partie konnte nach dem Neustart leider nicht fortgesetzt werden.', 'warn');
   }
@@ -142,7 +143,7 @@ function checkUpdate() {
   setTimeout(() => location.reload(), 1200);
 }
 socket.on('session:replaced', () => { toast('Du hast SchachArena in einem anderen Tab geöffnet.', 'warn'); });
-socket.on('stats', (s) => { state.stats = s; $('#online-count').textContent = `${s.online} online`; const el = $('#hero-online'); if (el) el.textContent = s.online; const pl = $('#hero-playing'); if (pl) pl.textContent = s.playing; });
+socket.on('stats', (s) => { const liveBefore = state.stats.live; state.stats = s; if (state.view === 'play' && (s.live || liveBefore)) refreshLive(); $('#online-count').textContent = `${s.online} online`; const el = $('#hero-online'); if (el) el.textContent = s.online; const pl = $('#hero-playing'); if (pl) pl.textContent = s.playing; });
 socket.on('toast', (t) => toast(esc(t.text), t.type));
 
 function setProfile(p, { coinsAnim = false } = {}) {
@@ -309,7 +310,9 @@ async function showPlayerProfile(id) {
   if (!ov.root.isConnected) return; // schon wieder zu
   if (r.error || !r.profile) { ov.close(); return toast(esc(r.error || 'Profil nicht gefunden.'), 'warn'); }
   const u = r.profile;
+  const adm = state.profile?.admin ? emit('admin:profile', { id }) : null;
   ov.el.innerHTML = `<div class="pp-wrap">${profileCardHTML(u)}
+    ${adm ? '<div class="pc-sec adm-vs" id="adm-vs"><h4>🛡️ Admin: Bilanz gegen Gegner</h4><p class="muted small">Lade…</p></div>' : ''}
     <div class="pc-sec"><h4>🕹️ Letzte Partien</h4>
     <ul class="history">${u.history.length ? u.history.map((h) => `<li>${avatar(h.oppAvatar, 30)}<div><b>${esc(h.opponent)}</b> ${h.type === 'bot' ? '<span class="tag">Bot</span>' : ''}<div class="muted" style="font-size:12px">${REASONS[h.reason] || ''} · ${timeAgo(h.at)}</div></div>
       <div class="res"><b class="res-${h.outcome}">${h.outcome === 'win' ? 'Sieg' : h.outcome === 'loss' ? 'Niederlage' : 'Remis'}</b>${h.type === 'online' && h.rating ? `<div class="muted">${h.rating > 0 ? '+' : ''}${h.rating} Elo</div>` : ''}</div></li>`).join('') : '<li class="muted">Noch keine Partien.</li>'}</ul></div>
@@ -317,6 +320,29 @@ async function showPlayerProfile(id) {
     <div class="modal-actions"><button class="btn primary" data-x>Schließen</button></div></div>`;
   $('[data-x]', ov.el).onclick = ov.close;
   wireProfileMusic(ov.el, emit);
+  if (adm) adm.then((ar) => {
+    const box = $('#adm-vs', ov.el); if (!box) return;
+    box.outerHTML = adminVsHTML(ar.admin, u);
+    $$('.vs-table tr[data-uid]', ov.el).forEach((tr) => tr.onclick = () => { ov.close(); showPlayerProfile(tr.dataset.uid); });
+  });
+}
+
+// Wer hat wie oft gegen wen gewonnen – nur für Admins
+function adminVsHTML(a, u) {
+  if (!a) return '<div class="pc-sec"><p class="form-error">Bilanz konnte nicht geladen werden.</p></div>';
+  const row = (o, isBot) => {
+    const n = o.w + o.l + o.d, rate = n ? Math.round((o.w / n) * 100) : 0;
+    return `<tr${o.id ? ` data-uid="${esc(o.id)}" class="clickable"` : ''}><td><div class="who">${isBot ? '🤖' : avatar(o.avatar, 26)}<span>${esc(o.name)}${o.code ? ` <span class="muted small">${o.code}</span>` : ''}${o.online ? ' <i class="dot"></i>' : ''}</span></div></td>
+      <td class="res-win"><b>${o.w}</b></td><td class="res-loss"><b>${o.l}</b></td><td class="res-draw">${o.d}</td>
+      <td><div class="vs-bar"><i style="width:${rate}%"></i></div><span class="muted small">${rate}%</span></td>
+      <td class="${o.elo >= 0 ? 'res-win' : 'res-loss'}">${isBot ? '–' : `${o.elo > 0 ? '+' : ''}${o.elo}`}</td><td class="muted small">${o.unrated ? `⚖️ ${o.unrated}` : ''}</td></tr>`;
+  };
+  const table = (list, isBot) => list.length ? `<table class="lb vs-table"><thead><tr><th>${isBot ? 'Bot' : 'Gegner'}</th><th>Siege</th><th>Niederl.</th><th>Remis</th><th>Siegquote</th><th>Elo</th><th></th></tr></thead><tbody>${list.map((o) => row(o, isBot)).join('')}</tbody></table>` : '<p class="muted small">Noch keine Partien.</p>';
+  const tw = a.vs.reduce((s, o) => s + o.w, 0), tl = a.vs.reduce((s, o) => s + o.l, 0);
+  return `<div class="pc-sec adm-vs"><h4>🛡️ Admin: Bilanz gegen Gegner <span class="muted small">Code ${a.code} · ${fmtNum(a.coins)} Münzen · ${a.registered ? 'Konto' : 'Gast'}</span></h4>
+    <p class="muted small" style="margin:0 0 8px">${esc(u.name)} hat online <b class="res-win">${tw}</b>× gewonnen und <b class="res-loss">${tl}</b>× verloren – gegen ${a.vs.length} verschiedene Gegner. ⚖️ = davon nicht gewertet (Fair-Play-Check). Ältere Partien zählen nur, soweit sie in den letzten 50 Partien stehen.</p>
+    ${table(a.vs, false)}
+    <h4 style="margin-top:14px">🤖 Gegen Bots</h4>${table(a.vsBot, true)}</div>`;
 }
 
 function showBotProfile(b) {
@@ -345,6 +371,7 @@ function go(view) {
   if (view === 'game' && !state.game && !state.bot) view = 'play';
   if (view === 'four' && !state.four) view = 'play';
   if (state.view === 'four' && view !== 'four' && fourActive()) { toast('Du spielst gerade 4er-Schach – gib erst auf oder spiel zu Ende.', 'warn'); return; }
+  if (state.view === 'game' && view !== 'game' && state.game?.spectator) stopWatching();
   if (state.view === 'game' && view !== 'game' && (state.game?.active || (state.bot && !state.bot.over))) {
     if (state.game?.active) { toast('Beende zuerst dein laufendes Spiel.', 'warn'); return; }
     state.bot.over = true; // Bot-Partie verlassen
@@ -412,6 +439,7 @@ function renderPlay() {
       </div>
       <div class="hero-board"><div class="hero-tilt"></div></div>
     </div>
+    <div class="card live-card" id="card-live" hidden></div>
     <div class="card four-card" id="card-four"></div>
     <div class="play-grid">
       <div class="card play-card" id="card-random"></div>
@@ -432,7 +460,7 @@ function renderPlay() {
       </div>
     </div>`;
   renderHeroBoard();
-  renderRandomCard(); renderInviteCard(); renderFourCard();
+  renderRandomCard(); renderInviteCard(); renderFourCard(); refreshLive();
   const inp = $('#join-input');
   inp.oninput = () => { inp.value = inp.value.replace(/\D/g, ''); };
   inp.onkeydown = (e) => { if (e.key === 'Enter') joinCode(); };
@@ -538,6 +566,44 @@ socket.on('challenge:incoming', ({ id, from }) => {
   $$('[data-a]', ov.el).forEach((b) => b.onclick = () => answer(b.dataset.a === '1'));
   const timer = setTimeout(() => answer(false), 30000);
 });
+
+// ================================================================ Live zuschauen
+async function refreshLive() {
+  const el = $('#card-live'); if (!el) return;
+  const { list = [] } = await emit('live:list');
+  const mine = state.profile?.id;
+  const games = list.filter((g) => g.players.w.id !== mine && g.players.b.id !== mine);
+  el.hidden = !games.length;
+  if (!games.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="live-head"><span class="live-dot"></span><h3>Live zuschauen</h3><span class="muted small">${games.length} Zufallsmatch${games.length > 1 ? 'es' : ''} läuft gerade</span></div>
+    <div class="live-list">${games.slice(0, 6).map((g) => `<button class="live-item" data-watch="${esc(g.id)}">
+      <span class="lv-p">${avatar(g.players.w.avatar, 30)}<b>${esc(g.players.w.name)}</b><small>${g.players.w.rating}</small></span>
+      <span class="lv-vs">VS<small>${g.moves} Züge${g.watchers ? ` · 👀 ${g.watchers}` : ''}</small></span>
+      <span class="lv-p right"><small>${g.players.b.rating}</small><b>${esc(g.players.b.name)}</b>${avatar(g.players.b.avatar, 30)}</span>
+      <span class="lv-go">👀 Zuschauen</span></button>`).join('')}</div>`;
+  $$('[data-watch]', el).forEach((b) => b.onclick = () => watchGame(b.dataset.watch));
+}
+async function watchGame(id) {
+  if (state.game?.active && !state.game.spectator) return toast('Du spielst gerade selbst.', 'warn');
+  const r = await emit('watch:start', { id });
+  if (r.error) { toast(esc(r.error), 'warn'); refreshLive(); return; }
+  const d = r.game;
+  state.bot = null;
+  const g = state.game = { ...d, active: true, spectator: true, sans: d.moves.map((m) => m.san), clockAt: performance.now(), marks: {}, fens: [], anaChess: d.startFen ? new Chess(d.startFen) : new Chess() };
+  for (const m of d.moves) { g.fens.push(g.anaChess.fen()); try { g.anaChess.move(m.san); } catch { /* egal */ } }
+  setupBoardLook(d.board, d.skins, 'w');
+  const last = d.moves.at(-1);
+  board.load(d.fen, last ? { from: last.from, to: last.to } : null, false);
+  renderOnline(); setBanner('');
+  go('game');
+  toast(`👀 Du schaust live zu: <b>${esc(d.players.w.name)}</b> vs <b>${esc(d.players.b.name)}</b>`, 'good');
+}
+function stopWatching() {
+  if (!state.game?.spectator) return;
+  socket.emit('watch:stop');
+  state.game = null;
+}
+socket.on('game:watchers', ({ id, n }) => { if (state.game?.id === id) { state.game.watchers = n; renderOnline(); } });
 
 // ================================================================ 4er-Schach
 const FOUR_TIMES = [[180000, '3 Min'], [300000, '5 Min'], [600000, '10 Min']];
@@ -758,6 +824,7 @@ function closeVote() { if (voteOv) { voteOv.close(); voteOv = null; } }
 // ================================================================ Gemeinsame Spielansicht
 const board = new Board($('#board'), {
   canMove: (c) => {
+    if (state.game?.spectator) return false;
     if (state.game?.active) return c === state.game.you && !state.game.clock?.paused;
     if (state.bot && !state.bot.over && !state.bot.thinking) return c === state.bot.color;
     return false;
@@ -938,6 +1005,7 @@ function setBanner(htmlStr) { const b = $('#game-banner'); if (!htmlStr) { b.hid
 
 // ================================================================ Online-Spiel
 socket.on('game:start', (d) => {
+  if (state.game?.spectator) socket.emit('watch:stop');
   closeVote();
   $$('.overlay').forEach((o) => o.remove());
   state.bot = null;
@@ -960,8 +1028,25 @@ socket.on('game:start', (d) => {
   if (d.drawOffer && d.drawOffer !== d.you) showDrawOffer();
 });
 
+function renderSpectator() {
+  const g = state.game;
+  const clk = (c) => g.clock.unlimited ? null : fmtClock(clockLeft(c));
+  const bottom = 'w', top = 'b'; // Drehen tauscht die Leisten per CSS
+  renderBar($('#bar-top'), g.players[top], top, { clock: clk(top), tag: top === 'w' ? 'Weiß' : 'Schwarz' });
+  renderBar($('#bar-bottom'), g.players[bottom], bottom, { clock: clk(bottom), tag: bottom === 'w' ? 'Weiß' : 'Schwarz' });
+  const turn = board.chess.turn();
+  $('#bar-top').classList.toggle('turn', g.active && turn === top);
+  $('#bar-bottom').classList.toggle('turn', g.active && turn === bottom);
+  renderMoves(g.sans);
+  if (g.active) setStatus(`<span class="live-dot"></span> <b>LIVE</b> · ${esc(g.players[turn].name)} ist am Zug${board.chess.inCheck() ? ' – <span style="color:var(--bad)">Schach!</span>' : ''}${g.watchers ? ` · 👀 ${g.watchers}` : ''}`);
+  $('#game-actions').innerHTML = `<button class="btn" id="flip-btn">🔄 Brett drehen</button><button class="btn danger" id="watch-stop">🚪 Beenden</button>`;
+  $('#emotes').hidden = true;
+  $('#flip-btn').onclick = () => { flipBoard(); renderSpectator(); };
+  $('#watch-stop').onclick = () => go('play');
+}
 function renderOnline() {
   const g = state.game; if (!g) return;
+  if (g.spectator) return renderSpectator();
   const opp = g.you === 'w' ? 'b' : 'w';
   const clk = (c) => g.clock.unlimited ? null : fmtClock(clockLeft(c));
   renderBar($('#bar-top'), g.players[opp], opp, { clock: clk(opp) });
@@ -971,6 +1056,7 @@ function renderOnline() {
   $('#bar-bottom').classList.toggle('turn', g.active && turn === g.you);
   renderMoves(g.sans);
   if (g.active && g.clock?.paused) setStatus('⏸️ Pausiert – warte auf deinen Gegner…');
+  else if (g.active && g.watchers) setStatus((turn === g.you ? '🟢 Du bist am Zug' : `⏳ ${esc(g.players[opp].name)} ist am Zug`) + ` · <span title="Zuschauer">👀 ${g.watchers}</span>`);
   else if (g.active) setStatus(turn === g.you ? '🟢 Du bist am Zug' + (board.chess.inCheck() ? ' – <span style="color:var(--bad)">Schach!</span>' : '') : `⏳ ${esc(g.players[opp].name)} ist am Zug`);
   $('#game-actions').innerHTML = g.active
     ? `<button class="btn" id="draw-btn" ${g.drawOffer === g.you ? 'disabled' : ''}>🤝 Remis</button><button class="btn danger" id="resign-btn">🏳️ Aufgeben</button>
@@ -1043,6 +1129,7 @@ socket.on('game:state', (s) => {
   const prevOffer = g.drawOffer;
   g.drawOffer = s.drawOffer;
   renderOnline();
+  if (g.spectator) return;
   if (s.drawOffer && s.drawOffer !== g.you && prevOffer !== s.drawOffer) showDrawOffer();
   if (!s.drawOffer) setBanner('');
   if (s.resumed || s.resumedAfterUpdate) { clearInterval(state.oppTimer); setBanner(''); toast('▶️ Weiter geht\'s – beide sind wieder da!', 'good'); }
@@ -1087,6 +1174,7 @@ function showEmote(e) {
 
 socket.on('game:over', async (d) => {
   const g = state.game; if (!g || g.id !== d.id) return;
+  if (d.spectator) return spectatorOver(g, d);
   clearInterval(state.oppTimer);
   g.active = false;
   if (d.fen !== board.fen) board.load(d.fen, board.lastMove, true);
@@ -1103,6 +1191,24 @@ socket.on('game:over', async (d) => {
   setProfile(d.profile, { coinsAnim: true });
   showResult({ outcome: d.outcome, reason: d.reason, coins: d.coins, rating: d.ratingChange, online: true, unrated: d.unrated, variant: d.variant });
 });
+
+async function spectatorOver(g, d) {
+  g.active = false;
+  if (d.fen !== board.fen) board.load(d.fen, board.lastMove, true);
+  const winner = d.result === 'w' ? d.players.w : d.result === 'b' ? d.players.b : null;
+  setStatus(winner ? `🏆 ${esc(winner.name)} gewinnt` : '🤝 Remis');
+  if (d.finisher) {
+    await mateFx();
+    const { playFinisher } = await import('./finisher.js');
+    await playFinisher({ finisher: d.finisher, fen: d.fen, boardTheme: d.board, skins: d.skins, loserColor: d.result === 'w' ? 'b' : 'w', winnerName: d.winnerName, attackerSq: board.lastMove?.to });
+  }
+  if (d.reason === 'resign') await throwBoard();
+  sound.notify();
+  const ov = openOverlay(`<div class="result-head ${winner ? 'win' : 'draw'}"><div class="result-icon">${winner ? '🏆' : '🤝'}</div>
+      <h2>${winner ? `${esc(winner.name)} gewinnt!` : 'Remis'}</h2><p class="muted">${REASONS[d.reason] || ''} · Live-Match</p></div>
+    <div class="modal-actions"><button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="more">📺 Weitere Live-Matches</button></div>`);
+  $$('[data-r]', ov.el).forEach((b) => b.onclick = () => { ov.close(); state.game = null; go('play'); if (b.dataset.r === 'more') setTimeout(() => $('#card-live')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300); });
+}
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
