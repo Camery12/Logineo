@@ -7,6 +7,9 @@ import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
 import { profileCardHTML, wireProfileMusic, stopProfileMusic, fmtPlaytime } from './profilecard.js';
 import { burstAt, shakeBoard, checkFlash, confetti, coinRain, shatterPiece, preloadPieces, tableFlip, resetThrown } from './fx.js';
+import { FourBoard } from './fourboard.js';
+import { COLOR_NAMES, COLOR_HEX } from './four.js';
+import { pieceURL4 } from './pieces.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -59,7 +62,7 @@ function openOverlay(content, { closable = true, wide = false, onClose = null } 
 const REASONS = {
   checkmate: 'durch Schachmatt', resign: 'durch Aufgabe', timeout: 'auf Zeit', abandon: 'Spiel verlassen',
   stalemate: 'durch Patt', insufficient: 'ungenügendes Material', repetition: 'dreifache Stellungswiederholung',
-  fifty: '50-Züge-Regel', agreement: 'Remis vereinbart', draw: 'Remis',
+  fifty: '50-Züge-Regel', agreement: 'Remis vereinbart', draw: 'Remis', 'four-win': '4er-Schach · 1. Platz', 'four-place': '4er-Schach',
 };
 const DECISIONS = { gleich: 'Beide hatten dasselbe Brett', einig: 'Ihr wart euch einig', zufall: 'Per Zufall entschieden', 'einzige Stimme': 'Nur eine Stimme abgegeben' };
 
@@ -114,7 +117,8 @@ function warmFinisherLater() {
 
 // ---------------------------------------------------------------- Automatisch aktualisieren
 // Nach einem Update lädt die Seite kurz neu – aber nie mitten in einer Partie, Suche, Abstimmung oder einem Finisher.
-const isBusy = () => !!(state.view === 'game' || state.game?.active || (state.bot && !state.bot.over) || state.searching || state.room
+const fourActive = () => !!(state.four && state.four.status === 'playing' && state.four.alive[state.four.you]);
+const isBusy = () => !!(state.view === 'game' || state.view === 'four' || fourActive() || state.fourLobby || state.game?.active || (state.bot && !state.bot.over) || state.searching || state.room
   || $('.overlay') || $('.finisher') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName));
 function checkUpdate() {
   const v = state.updateTo;
@@ -319,8 +323,10 @@ function animateNumber(el, from, to) {
 
 // ================================================================ Navigation
 function go(view) {
-  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game'].includes(view)) view = 'play';
+  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four'].includes(view)) view = 'play';
   if (view === 'game' && !state.game && !state.bot) view = 'play';
+  if (view === 'four' && !state.four) view = 'play';
+  if (state.view === 'four' && view !== 'four' && fourActive()) { toast('Du spielst gerade 4er-Schach – gib erst auf oder spiel zu Ende.', 'warn'); return; }
   if (state.view === 'game' && view !== 'game' && (state.game?.active || (state.bot && !state.bot.over))) {
     if (state.game?.active) { toast('Beende zuerst dein laufendes Spiel.', 'warn'); return; }
     state.bot.over = true; // Bot-Partie verlassen
@@ -388,6 +394,7 @@ function renderPlay() {
       </div>
       <div class="hero-board"><div class="hero-tilt"></div></div>
     </div>
+    <div class="card four-card" id="card-four"></div>
     <div class="play-grid">
       <div class="card play-card" id="card-random"></div>
       <div class="card play-card" id="card-invite"></div>
@@ -407,7 +414,7 @@ function renderPlay() {
       </div>
     </div>`;
   renderHeroBoard();
-  renderRandomCard(); renderInviteCard();
+  renderRandomCard(); renderInviteCard(); renderFourCard();
   const inp = $('#join-input');
   inp.oninput = () => { inp.value = inp.value.replace(/\D/g, ''); };
   inp.onkeydown = (e) => { if (e.key === 'Enter') joinCode(); };
@@ -428,6 +435,7 @@ async function joinCode() {
   btn.disabled = false;
   if (r.error) return toast(esc(r.error), 'warn');
   if (r.challenged) toast(`⚔️ Herausforderung an ${esc(r.challenged)} gesendet…`, 'good');
+  if (r.four) toast('👥 Du bist in der 4er-Lobby!', 'good');
 }
 
 let searchTimer = null;
@@ -511,6 +519,171 @@ socket.on('challenge:incoming', ({ id, from }) => {
   const answer = (accept) => { socket.emit('challenge:respond', { id, accept }); ov.close(); clearTimeout(timer); };
   $$('[data-a]', ov.el).forEach((b) => b.onclick = () => answer(b.dataset.a === '1'));
   const timer = setTimeout(() => answer(false), 30000);
+});
+
+// ================================================================ 4er-Schach
+const FOUR_TIMES = [[180000, '3 Min'], [300000, '5 Min'], [600000, '10 Min']];
+const fourDot = (c) => `<i class="fdot" style="--fc:${COLOR_HEX[c]}"></i>`;
+function renderFourCard() {
+  const el = $('#card-four'); if (!el) return;
+  const l = state.fourLobby, me = state.profile?.id;
+  const t = state.fourTime || 300000;
+  if (l) {
+    const host = l.host === me;
+    const hidden = !!state.codeHidden;
+    el.innerHTML = `<div class="four-head"><div class="ic">👥</div><div><h3>4er-Lobby</h3><p>Teile den Code – bis zu 4 Spieler. ${host ? 'Freie Plätze füllst du mit Bots.' : 'Der Gastgeber startet das Spiel.'}</p></div></div>
+      <div class="four-lobby">
+        <div class="code-wrap ${hidden ? 'hidden-code' : ''}">${codeDigits(l.code)}<button class="code-eye" id="four-eye">${hidden ? '👁️ Code anzeigen' : '🙈'}</button></div>
+        <div class="four-seats">${[0, 1, 2, 3].map((i) => { const p = l.players[i]; return p ? `<div class="seat on">${avatar(p.avatar, 34)}<b>${esc(p.name)}</b>${p.id === l.host ? '<span class="tag">Host</span>' : ''}</div>` : '<div class="seat"><span class="seat-empty">🤖</span><span class="muted">frei – wird Bot</span></div>'; }).join('')}</div>
+      </div>
+      <div class="room-actions four-actions-row">
+        <button class="btn" id="four-big">🔍 Groß zeigen</button><button class="btn" id="four-link">🔗 Link</button>
+        ${host ? `<button class="btn primary" id="four-go">▶ Starten (${4 - l.players.length} Bot${4 - l.players.length === 1 ? '' : 's'})</button>` : '<span class="muted small" style="align-self:center">Warte auf den Start…</span>'}
+        <button class="btn danger" id="four-leave">✕ Verlassen</button>
+      </div>`;
+    $('#four-eye').onclick = () => { state.codeHidden = !hidden; renderFourCard(); };
+    $('#four-big').onclick = () => showBigCode(l.code, false);
+    $('#four-link').onclick = () => copy(inviteLink(l.code), 'Einladungslink kopiert!');
+    $('#four-leave').onclick = () => { socket.emit('four:leave'); state.fourLobby = null; renderFourCard(); };
+    const goBtn = $('#four-go'); if (goBtn) goBtn.onclick = async () => { const r = await emit('four:start'); if (r.error) toast(esc(r.error), 'warn'); };
+  } else {
+    el.innerHTML = `<div class="four-head"><div class="ic">👥</div><div><h3>4er-Schach <span class="tag new-tag">NEU</span></h3>
+      <p>Vier Spieler, ein riesiges Brett – jeder gegen jeden. Wer matt ist, fliegt raus, der Letzte gewinnt. Leere Plätze übernehmen Bots.</p></div></div>
+      <div class="four-row">
+        <div class="seg" id="four-time">${FOUR_TIMES.map(([v, lb]) => `<button data-t="${v}" class="${v === t ? 'on' : ''}">${lb}</button>`).join('')}</div>
+        <button class="btn primary" id="four-create">👥 Lobby erstellen</button>
+        <button class="btn" id="four-solo">🤖 Gegen 3 Bots</button>
+      </div>
+      <p class="muted small" style="margin:0">Platz 1: ${coinHTML(300)} · Platz 2: ${coinHTML(120)} · Platz 3: ${coinHTML(60)} · Platz 4: ${coinHTML(25)} – mit Bots weniger. Freunde treten mit dem Code bei „Code eingeben“ bei.</p>`;
+    $$('#four-time button').forEach((b) => b.onclick = () => { state.fourTime = +b.dataset.t; renderFourCard(); });
+    $('#four-create').onclick = async () => {
+      const r = await emit('four:create', { timeMs: t });
+      if (r.error) return toast(esc(r.error), 'warn');
+      state.fourLobby = r.lobby; renderFourCard(); sound.notify();
+    };
+    $('#four-solo').onclick = async () => { const r = await emit('four:solo', { timeMs: t }); if (r.error) toast(esc(r.error), 'warn'); };
+  }
+}
+socket.on('four:lobby', (l) => {
+  if (l.closed) { state.fourLobby = null; if (!l.started) toast('Die 4er-Lobby wurde geschlossen.', 'warn'); }
+  else { if (state.fourLobby && l.players.length > state.fourLobby.players.length) sound.notify(); state.fourLobby = l; }
+  renderFourCard();
+});
+
+let fourBoard = null, fourTimer = null;
+function ensureFourView() {
+  const root = $('#view-four');
+  if (!root.querySelector('#fboard')) {
+    root.innerHTML = `<div class="four-layout">
+      <div class="four-board-wrap"><div id="fboard"></div></div>
+      <div class="four-side">
+        <div class="card four-status" id="four-status"></div>
+        <div class="card four-players" id="four-players"></div>
+        <div class="card four-actions" id="four-actions"></div>
+      </div></div>`;
+    fourBoard = new FourBoard($('#fboard'), { onMove: async (from, to) => {
+      const r = await emit('four:move', { from, to });
+      if (r.error) { toast(esc(r.error), 'warn'); fourBoard.set({ ...state.four }, state.four.you); }
+    } });
+  }
+  const b = findItem('board', state.profile?.equipped.board) || BOARDS[0];
+  fourBoard.setTheme(b.light, b.dark);
+}
+function fourClockLeft(c) {
+  const g = state.four; let v = g.clock[c];
+  if (g.status === 'playing' && g.turn === c) v -= performance.now() - g.clockAt;
+  return Math.max(0, v);
+}
+function renderFourSide() {
+  const g = state.four; if (!g) return;
+  const order = [0, 1, 2, 3];
+  const reasonTxt = { checkmate: 'Schachmatt', stalemate: 'Patt', resign: 'aufgegeben', timeout: 'Zeit abgelaufen', abandon: 'Verbindung weg', points: 'weniger Material' };
+  const outOf = Object.fromEntries(g.out.map((o) => [o.color, o.reason]));
+  $('#four-players').innerHTML = `<h4>Spieler</h4>${order.map((c) => {
+    const p = g.players[c], alive = g.alive[c];
+    return `<div class="fp ${g.turn === c && alive && g.status === 'playing' ? 'turn' : ''} ${alive ? '' : 'out'} ${c === g.you ? 'me' : ''}" style="--fc:${COLOR_HEX[c]}" data-c="${c}">
+      ${fourDot(c)}${avatar(p.avatar, 32)}
+      <div class="fp-name"><b>${esc(p.name)}</b><span>${COLOR_NAMES[c]}${c === g.you ? ' · Du' : ''}${p.bot ? ' · Bot' : ''}${!p.bot && p.online === false && alive ? ' · 📡 offline' : ''}</span></div>
+      <div class="fp-right">${alive ? `<span class="fp-clock" data-c="${c}">${fmtClock(fourClockLeft(c))}</span>` : `<span class="fp-out">☠️ ${reasonTxt[outOf[c]] || 'raus'}</span>`}</div>
+    </div>`;
+  }).join('')}`;
+  const meAlive = g.alive[g.you];
+  let st;
+  if (g.status === 'over') st = '🏁 Partie beendet';
+  else if (!meAlive) st = '👀 Du bist ausgeschieden – du kannst weiter zuschauen.';
+  else if (g.turn === g.you) st = `${fourDot(g.you)} <b>Du bist am Zug!</b>`;
+  else st = `${fourDot(g.turn)} ${esc(g.players[g.turn].name)} (${COLOR_NAMES[g.turn]}) ist am Zug…`;
+  $('#four-status').innerHTML = st;
+  $('#four-actions').innerHTML = g.status === 'playing' && meAlive
+    ? '<button class="btn danger block" id="four-resign">🏳️ Aufgeben</button>'
+    : '<button class="btn block" id="four-exit">↩️ Zur Lobby</button>';
+  const rs = $('#four-resign'); if (rs) rs.onclick = () => confirmBox('Aufgeben?', 'Du scheidest aus, deine Figuren werden grau.', 'Aufgeben', () => socket.emit('four:resign'));
+  const ex = $('#four-exit'); if (ex) ex.onclick = () => { if (state.four?.status === 'playing') socket.emit('four:leave'); state.four = null; go('play'); };
+}
+function tickFourClocks() {
+  if (!state.four || state.view !== 'four') return;
+  for (const el of $$('.fp-clock')) {
+    const c = +el.dataset.c, left = fourClockLeft(c);
+    el.textContent = fmtClock(left);
+    el.classList.toggle('low', left < 30000 && state.four.turn === c);
+  }
+}
+window.__fourState = () => state.four; // für Tests
+function applyFour(d, move = null) {
+  state.four = { ...d, clockAt: performance.now() };
+  ensureFourView();
+  fourBoard.set(state.four, d.you, move);
+  renderFourSide();
+  clearInterval(fourTimer); fourTimer = setInterval(tickFourClocks, 250);
+}
+socket.on('four:start', (d) => {
+  $$('.overlay').forEach((o) => o.remove());
+  state.fourLobby = null; renderFourCard();
+  applyFour(d);
+  go('four');
+  if (!d.resumed) { sound.start(); toast(`👥 4er-Schach! Du spielst ${fourDot(d.you)} <b>${COLOR_NAMES[d.you]}</b>`, 'good'); }
+  else toast('4er-Spiel fortgesetzt', 'good');
+});
+socket.on('four:state', (d) => {
+  if (!state.four || state.four.id !== d.id) return;
+  const before = state.four;
+  applyFour(d, d.move || null);
+  const ev = d.events || [];
+  if (d.move) (ev.some((e) => e.type === 'capture') ? sound.capture() : sound.move());
+  if (ev.some((e) => e.type === 'check' && e.color === d.you)) { sound.check(); toast('⚠️ <b>Schach!</b> Dein König wird angegriffen.', 'warn'); }
+  else if (ev.some((e) => e.type === 'check')) sound.check();
+  for (const e of ev) {
+    if (e.type === 'out') {
+      const why = { checkmate: 'ist schachmatt', stalemate: 'ist patt', resign: 'hat aufgegeben', timeout: 'hat keine Zeit mehr', abandon: 'ist zu lange weg', points: 'hat weniger Material' }[e.reason] || 'ist raus';
+      toast(`☠️ ${fourDot(e.color)} <b>${esc(d.players[e.color].name)}</b> ${why}!`, e.color === d.you ? 'warn' : 'good');
+      if (e.reason === 'checkmate') sound.boom?.();
+      const row = $(`.fp[data-c="${e.color}"]`); if (row) { row.classList.remove('boom'); void row.offsetWidth; row.classList.add('boom'); }
+      $('#fboard')?.classList.remove('fb-shake'); void $('#fboard')?.offsetWidth; $('#fboard')?.classList.add('fb-shake');
+    }
+    if (e.type === 'offline') toast(`📡 ${esc(d.players[e.color].name)} hat die Verbindung verloren.`, 'warn');
+  }
+  if (before.turn !== d.you && d.turn === d.you && d.status === 'playing' && d.alive[d.you]) sound.notify();
+});
+socket.on('four:over', (d) => {
+  if (d.profile) setProfile(d.profile, { coinsAnim: true });
+  const inView = state.four && state.four.id === d.id;
+  if (inView) applyFour(d);
+  const win = d.place === 1;
+  win ? sound.win() : sound.notify();
+  if (win) confetti();
+  const medal = ['🥇', '🥈', '🥉', '4.'];
+  const ov = openOverlay(`<div class="result-head ${win ? 'win' : 'draw'}"><div class="result-icon">${win ? '🏆' : medal[d.place - 1]}</div>
+      <h2>${win ? 'Du gewinnst das 4er-Schach!' : `Platz ${d.place}`}</h2><p class="muted">4er-Schach · ${d.bots ? `mit ${d.bots} Bot${d.bots > 1 ? 's' : ''}` : 'nur Menschen'}</p></div>
+    <ol class="four-rank">${d.ranking.map((r) => `<li class="${r.color === d.you ? 'me' : ''}"><span>${medal[r.place - 1]}</span>${fourDot(r.color)}<b>${esc(r.name)}</b>${r.bot ? '<span class="tag">Bot</span>' : ''}<span class="muted small">${r.reason ? { checkmate: 'matt', stalemate: 'patt', resign: 'aufgegeben', timeout: 'Zeit', abandon: 'weg', points: 'weniger Material' }[r.reason] : 'Sieger'}</span></li>`).join('')}</ol>
+    <div class="reward"><span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${d.coins}</b> Münzen</span></div>
+    ${d.unrated ? `<div class="unrated">⚖️ <b>Nicht gewertet</b><span>${esc(d.unrated)}</span></div>` : ''}
+    <div class="modal-actions"><button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">🤖 Nochmal gegen Bots</button></div>`);
+  if (d.coins > 0) setTimeout(() => coinRain($('.reward .coin-pill', ov.el), $('#coin-count').parentElement, Math.min(18, 4 + Math.round(d.coins / 20)), (i) => { if (i % 3 === 0) sound.coin(); }), 350);
+  $$('[data-r]', ov.el).forEach((b) => b.onclick = async () => {
+    ov.close(); state.four = null;
+    if (b.dataset.r === 'again') { const r = await emit('four:solo', { timeMs: state.fourTime || 300000 }); if (r.error) toast(esc(r.error), 'warn'); }
+    else go('play');
+  });
 });
 
 // ================================================================ Brett-Abstimmung

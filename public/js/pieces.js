@@ -61,3 +61,25 @@ export function pieceURL(type, color, skinId) {
   if (!cache.has(key)) cache.set(key, `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(pieceSVG(type, color, skinId))}")`);
   return cache.get(key);
 }
+
+// 4er-Schach: vier Spielerfarben + Grau für ausgeschiedene Spieler
+const FOUR_PALETTES = [
+  { fill: ['#ff7a7a', '#b3161b'], stroke: '#3d0306', detail: '#ffe1e1' },
+  { fill: ['#7dbcff', '#1b4fbf'], stroke: '#05173f', detail: '#e2efff' },
+  { fill: ['#ffe27a', '#c99406'], stroke: '#3d2b00', detail: '#fff6cc' },
+  { fill: ['#7cf0ac', '#168447'], stroke: '#032814', detail: '#e3fff0' },
+  { fill: ['#c4c7ce', '#71757e'], stroke: '#2a2c31', detail: '#eceef2' },
+];
+const cache4 = new Map();
+export function pieceURL4(type, color) {
+  const key = type + color;
+  if (!cache4.has(key)) {
+    const pal = FOUR_PALETTES[color];
+    const fake = { id: '__four' + color, w: pal, b: pal };
+    PIECES.push(fake);
+    const svg = pieceSVG(type, 'w', fake.id).replace(/id="gw"/g, `id="g4${color}"`).replace(/url\(#gw\)/g, `url(#g4${color})`);
+    PIECES.pop();
+    cache4.set(key, `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`);
+  }
+  return cache4.get(key);
+}

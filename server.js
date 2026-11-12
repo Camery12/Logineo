@@ -10,6 +10,7 @@ import { Chess } from 'chess.js';
 import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
 import { checkUsername, badWord } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
+import * as Four from './public/js/four.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -267,7 +268,7 @@ const sockOf = (uid) => online.get(uid);
 const emitTo = (uid, ev, data) => sockOf(uid)?.emit(ev, data);
 
 function broadcastStats() {
-  io.emit('stats', { online: online.size, playing: [...games.values()].filter((g) => g.status !== 'over').length * 2, queue: queue.length });
+  io.emit('stats', { online: online.size, playing: [...games.values()].filter((g) => g.status !== 'over').length * 2 + [...games4.values()].filter((g) => g.status === 'playing').reduce((s, g) => s + g.humans, 0), queue: queue.length });
 }
 setInterval(broadcastStats, 5000);
 
@@ -291,7 +292,7 @@ function gamePayload(g, uid) {
 }
 
 function startMatch(aId, bId, timeMs, source, variant = null) {
-  if (aId === bId || userGame.has(aId) || userGame.has(bId)) return false;
+  if (aId === bId || userGame.has(aId) || userGame.has(bId) || fourBusy(aId) || fourBusy(bId)) return false;
   queue = queue.filter((q) => q.userId !== aId && q.userId !== bId);
   for (const [code, r] of rooms) if (r.hostId === aId || r.hostId === bId) rooms.delete(code);
   const flip = Math.random() < 0.5;
@@ -438,6 +439,174 @@ function checkGameEnd(g) {
   if (c.isThreefoldRepetition()) return endGame(g, 'draw', 'repetition');
   if (c.isDraw()) return endGame(g, 'draw', 'fifty');
 }
+
+// ---------------------------------------------------------------- 4er-Schach (Jeder gegen jeden)
+const FOUR_REWARDS = [300, 120, 60, 25];            // Münzen für Platz 1–4
+const FOUR_BOT_FACTOR = [0, 1 / 3, 0.5, 0.75, 1];   // weniger Münzen, je mehr Bots mitspielen
+const FOUR_BOTS = [['Robo-Rudi', '🤖'], ['Kalle Kalkül', '🧮'], ['Turbo-Tina', '⚡'], ['Pixel-Paul', '👾'], ['Byte-Berta', '💾'], ['Captain Chip', '🦾']];
+const FOUR_ABANDON_MS = 60_000;
+const lobbies4 = new Map();  // Code -> { code, hostId, seats: [userId], timeMs }
+const games4 = new Map();    // id -> Spiel
+const userFour = new Map();  // userId -> id
+const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const fourGameOf = (uid) => games4.get(userFour.get(uid));
+const fourColorOf = (g, uid) => g.players.findIndex((p) => p.uid === uid);
+// Spielt der Spieler gerade noch aktiv 4er-Schach (oder sitzt in einer Lobby)?
+function fourBusy(uid) {
+  const g = fourGameOf(uid);
+  if (g && g.status === 'playing' && g.state.alive[fourColorOf(g, uid)]) return true;
+  for (const l of lobbies4.values()) if (l.seats.includes(uid)) return true;
+  return false;
+}
+const lobbyPayload = (l) => ({ code: l.code, host: l.hostId, timeMs: l.timeMs, players: l.seats.map((id) => pub(db.users[id])) });
+function emitLobby(l, extra = {}) { for (const id of l.seats) emitTo(id, 'four:lobby', { ...lobbyPayload(l), ...extra }); }
+function leaveLobby(uid) {
+  for (const [code, l] of lobbies4) {
+    if (!l.seats.includes(uid)) continue;
+    if (l.hostId === uid) { lobbies4.delete(code); for (const id of l.seats) if (id !== uid) emitTo(id, 'four:lobby', { closed: true }); }
+    else { l.seats = l.seats.filter((x) => x !== uid); emitLobby(l); }
+  }
+}
+
+function fourPlayers(g) {
+  return g.players.map((p) => (p.uid
+    ? { ...pub(db.users[p.uid]), online: online.has(p.uid) }
+    : { name: p.bot.name, avatar: { type: 'emoji', value: p.bot.avatar, color: 'rgba(255,255,255,.08)' }, bot: true, rating: '' }));
+}
+function fourClock(g) {
+  const c = [...g.clock];
+  if (g.status === 'playing') c[g.state.turn] -= Date.now() - g.lastTick;
+  return c.map((x) => Math.max(0, x));
+}
+const fourPayload = (g, uid, extra = {}) => ({
+  id: g.id, board: g.state.board, turn: g.state.turn, alive: g.state.alive, out: g.state.out, last: g.state.last, ply: g.state.ply,
+  players: fourPlayers(g), clock: fourClock(g), timeMs: g.timeMs, you: uid ? fourColorOf(g, uid) : -1, status: g.status, ...extra,
+});
+function fourBroadcast(g, ev, extra = {}) { for (const p of g.players) if (p.uid && userFour.get(p.uid) === g.id) emitTo(p.uid, ev, fourPayload(g, p.uid, extra)); }
+
+function startFour(humanIds, timeMs) {
+  const seats = shuffle([...humanIds, ...Array(4 - humanIds.length).fill(null)]);
+  const botNames = shuffle([...FOUR_BOTS]);
+  const g = {
+    id: crypto.randomUUID(), state: Four.newState(), timeMs, clock: [timeMs, timeMs, timeMs, timeMs], lastTick: Date.now(),
+    status: 'playing', disconnect: {}, moves: [0, 0, 0, 0], humans: humanIds.length,
+    players: seats.map((uid) => (uid ? { uid } : { bot: { name: botNames.pop()[0], avatar: null } })),
+  };
+  // Bot-Avatare passend zum Namen
+  for (const pl of g.players) if (pl.bot) pl.bot.avatar = FOUR_BOTS.find(([n]) => n === pl.bot.name)[1];
+  games4.set(g.id, g);
+  for (const uid of humanIds) {
+    userFour.set(uid, g.id);
+    queue = queue.filter((q) => q.userId !== uid);
+    for (const [code, r] of rooms) if (r.hostId === uid) rooms.delete(code);
+  }
+  fourBroadcast(g, 'four:start');
+  scheduleFourBot(g);
+  broadcastStats();
+  return g;
+}
+
+function scheduleFourBot(g) {
+  clearTimeout(g.botTimer);
+  if (g.status !== 'playing') return;
+  const c = g.state.turn;
+  if (!g.players[c].bot) return;
+  g.botTimer = setTimeout(() => {
+    if (g.status !== 'playing' || g.state.turn !== c) return;
+    const m = Four.botMove(g.state, c);
+    if (!m) return;
+    const res = Four.play(g.state, c, m.from, m.to);
+    if (res) fourAfterMove(g, c, res);
+  }, 650 + crypto.randomInt(700));
+}
+
+const FOUR_QUIET = 160; // so viele Halbzüge ohne Schlagen -> Ende, Material entscheidet
+const fourHumansAlive = (g) => g.players.some((p, c) => p.uid && g.state.alive[c]);
+function fourMaterial(g, c) { let m = 0; for (const p of g.state.board) if (p && p.c === c && !p.dead) m += Four.VALUE[p.t]; return m; }
+// Ende nach Punkten: wer am wenigsten Material hat, scheidet zuerst aus
+function fourByMaterial(g) {
+  const alive = [0, 1, 2, 3].filter((c) => g.state.alive[c]).sort((a, b) => fourMaterial(g, a) - fourMaterial(g, b));
+  for (const c of alive.slice(0, -1)) Four.eliminate(g.state, c, 'points');
+  g.state.over = true;
+}
+// Kein Mensch mehr dabei: Rest sofort ausspielen statt minutenlang Bots zuzuschauen
+function fourFastForward(g) {
+  let n = 0;
+  while (!g.state.over && n++ < 800 && (g.quiet || 0) < FOUR_QUIET) {
+    const c = g.state.turn, m = Four.botMove(g.state, c);
+    if (!m) break;
+    const res = Four.play(g.state, c, m.from, m.to);
+    if (!res) break;
+    g.quiet = res.events.some((e) => e.type === 'capture') ? 0 : (g.quiet || 0) + 1;
+  }
+  if (!g.state.over) fourByMaterial(g);
+  endFour(g);
+}
+function fourAfterMove(g, color, res) {
+  const now = Date.now();
+  g.clock[color] -= now - g.lastTick; g.lastTick = now; g.moves[color]++;
+  g.quiet = res.events.some((e) => e.type === 'capture') ? 0 : (g.quiet || 0) + 1;
+  if (g.quiet >= FOUR_QUIET && !g.state.over) { fourByMaterial(g); res.events.push({ type: 'points' }); }
+  fourBroadcast(g, 'four:state', { events: res.events, move: { from: res.move.from, to: res.move.to, color } });
+  if (g.state.over) return endFour(g);
+  if (!fourHumansAlive(g)) return fourFastForward(g);
+  scheduleFourBot(g);
+}
+
+function fourEliminate(g, color, reason) {
+  if (g.status !== 'playing' || !g.state.alive[color]) return;
+  const now = Date.now();
+  g.clock[g.state.turn] -= now - g.lastTick; g.lastTick = now;
+  const wasTurn = g.state.turn === color;
+  Four.eliminate(g.state, color, reason);
+  const events = [{ type: 'out', color, reason }];
+  if (wasTurn) g.state.turn = Four.nextColor(g.state, color);
+  Four.settle(g.state, events);
+  clearTimeout(g.disconnect[g.players[color].uid]);
+  fourBroadcast(g, 'four:state', { events });
+  if (g.state.over) return endFour(g);
+  if (!fourHumansAlive(g)) return fourFastForward(g);
+  scheduleFourBot(g);
+}
+
+function endFour(g) {
+  if (g.status === 'over') return;
+  g.status = 'over';
+  clearTimeout(g.botTimer);
+  for (const t of Object.values(g.disconnect)) clearTimeout(t);
+  const winner = g.state.alive.findIndex(Boolean);
+  const ranking = [winner, ...g.state.out.map((o) => o.color).reverse()].filter((c) => c >= 0);
+  const reasons = Object.fromEntries(g.state.out.map((o) => [o.color, o.reason]));
+  const players = fourPlayers(g);
+  const table = ranking.map((c, place) => ({ color: c, place: place + 1, name: players[c].name, bot: !!players[c].bot, reason: reasons[c] || null }));
+  const factor = FOUR_BOT_FACTOR[g.humans] || 0;
+  for (const [place, c] of ranking.entries()) {
+    const uid = g.players[c].uid;
+    if (!uid) continue;
+    const u = db.users[uid];
+    // Fair-Play: mindestens 16 Halbzüge insgesamt und 3 eigene Züge
+    const unrated = g.state.ply < 16 ? 'Zu kurz – die Partie hatte zu wenige Züge.' : g.moves[c] < 3 ? 'Du hast weniger als 3 Züge gemacht.' : null;
+    const coins = unrated ? 0 : Math.round((FOUR_REWARDS[place] * factor) / 5) * 5;
+    u.coins += coins;
+    if (!unrated) { u.stats.four ||= { games: 0, wins: 0 }; u.stats.four.games++; if (place === 0) u.stats.four.wins++; }
+    u.history.unshift({ type: 'four', opponent: '4er-Schach', oppAvatar: { type: 'emoji', value: '👥', color: '#334' }, outcome: place === 0 ? 'win' : 'loss', reason: place === 0 ? 'four-win' : 'four-place', place: place + 1, coins, rating: 0, moves: g.state.ply, at: Date.now(), ...(unrated ? { unrated } : {}) });
+    u.history = u.history.slice(0, 50);
+    emitTo(uid, 'four:over', { ...fourPayload(g, uid), ranking: table, place: place + 1, coins, unrated, profile: priv(u), bots: 4 - g.humans });
+  }
+  save();
+  for (const p of g.players) if (p.uid && userFour.get(p.uid) === g.id) userFour.delete(p.uid);
+  setTimeout(() => games4.delete(g.id), 60_000);
+  broadcastStats();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const g of games4.values()) {
+    if (g.status !== 'playing') continue;
+    const t = g.state.turn;
+    if (g.clock[t] - (now - g.lastTick) <= 0) fourEliminate(g, t, 'timeout');
+  }
+}, 250);
 
 setInterval(() => {
   const now = Date.now();
@@ -622,6 +791,13 @@ io.on('connection', (socket) => {
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
     ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null });
+    // Laufendes 4er-Spiel fortsetzen
+    const g4 = fourGameOf(user.id);
+    if (g4 && g4.status === 'playing') {
+      clearTimeout(g4.disconnect[user.id]); delete g4.disconnect[user.id];
+      socket.emit('four:start', { ...fourPayload(g4, user.id), resumed: true });
+      fourBroadcast(g4, 'four:state', { events: [] });
+    }
     // Laufendes Spiel fortsetzen
     const gid = userGame.get(user.id);
     const g = gid && games.get(gid);
@@ -819,15 +995,68 @@ io.on('connection', (socket) => {
   socket.on('room:create', need(({ timeMs = 600_000, variant = null } = {}, ack) => {
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
-    let code; do code = digits(6); while (rooms.has(code));
+    let code; do code = digits(6); while (rooms.has(code) || lobbies4.has(code));
     rooms.set(code, { code, hostId: user.id, timeMs: ALLOWED_TIMES.includes(timeMs) ? timeMs : 600_000, variant: VARIANTS[variant] ? variant : null, at: Date.now() });
     ack?.({ code, variant: VARIANTS[variant] ? variant : null });
   }));
+  // --- 4er-Schach
+  socket.on('four:create', need(({ timeMs = 300_000 } = {}, ack) => {
+    if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
+    let code; do code = digits(6); while (rooms.has(code) || lobbies4.has(code));
+    const l = { code, hostId: user.id, seats: [user.id], timeMs: ALLOWED_TIMES.includes(timeMs) && timeMs ? timeMs : 300_000 };
+    lobbies4.set(code, l);
+    ack?.({ lobby: lobbyPayload(l) });
+  }));
+  socket.on('four:start', need((_, ack) => {
+    const l = [...lobbies4.values()].find((x) => x.hostId === user.id);
+    if (!l) return ack?.({ error: 'Keine Lobby gefunden.' });
+    lobbies4.delete(l.code);
+    const humans = l.seats.filter((id) => online.has(id));
+    for (const id of l.seats) if (id !== user.id) emitTo(id, 'four:lobby', { closed: true, started: true });
+    startFour(humans, l.timeMs);
+    ack?.({ ok: true });
+  }));
+  socket.on('four:solo', need(({ timeMs = 300_000 } = {}, ack) => {
+    if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
+    startFour([user.id], ALLOWED_TIMES.includes(timeMs) && timeMs ? timeMs : 300_000);
+    ack?.({ ok: true });
+  }));
+  socket.on('four:leave', need(() => {
+    leaveLobby(user.id);
+    const g = fourGameOf(user.id);
+    if (g) { const c = fourColorOf(g, user.id); if (g.state.alive[c]) fourEliminate(g, c, 'resign'); userFour.delete(user.id); }
+  }));
+  socket.on('four:move', need(({ from, to } = {}, ack) => {
+    const g = fourGameOf(user.id);
+    if (!g || g.status !== 'playing') return ack?.({ error: 'Kein 4er-Spiel aktiv.' });
+    const c = fourColorOf(g, user.id);
+    if (g.state.turn !== c) return ack?.({ error: 'Du bist nicht am Zug.' });
+    const res = Four.play(g.state, c, Number(from), Number(to));
+    if (!res) return ack?.({ error: 'Ungültiger Zug.' });
+    ack?.({ ok: true });
+    fourAfterMove(g, c, res);
+  }));
+  socket.on('four:resign', need(() => {
+    const g = fourGameOf(user.id);
+    if (g) fourEliminate(g, fourColorOf(g, user.id), 'resign');
+  }));
+
   socket.on('room:cancel', need(() => { for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c); }));
 
   socket.on('code:join', need(({ code } = {}, ack) => {
     code = String(code || '').replace(/\D/g, '');
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
+    const lob = lobbies4.get(code);
+    if (lob) {
+      if (lob.seats.includes(user.id)) return ack?.({ error: 'Du bist schon in dieser Lobby.' });
+      if (fourBusy(user.id)) return ack?.({ error: 'Du bist schon in einem 4er-Spiel oder einer Lobby.' });
+      if (lob.seats.length >= 4) return ack?.({ error: 'Die 4er-Lobby ist schon voll.' });
+      lob.seats.push(user.id);
+      ack?.({ four: true });
+      if (lob.seats.length === 4) { lobbies4.delete(code); for (const id of lob.seats) emitTo(id, 'four:lobby', { closed: true, started: true }); startFour(lob.seats, lob.timeMs); }
+      else emitLobby(lob);
+      return;
+    }
     const room = rooms.get(code);
     if (room) {
       if (room.hostId === user.id) return ack?.({ error: 'Das ist dein eigener Code – teile ihn mit einem Freund.' });
@@ -963,6 +1192,13 @@ io.on('connection', (socket) => {
     online.delete(user.id);
     queue = queue.filter((q) => q.userId !== user.id);
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
+    leaveLobby(user.id);
+    const g4 = fourGameOf(user.id);
+    if (g4 && g4.status === 'playing' && g4.state.alive[fourColorOf(g4, user.id)]) {
+      const uid = user.id;
+      g4.disconnect[uid] = setTimeout(() => fourEliminate(g4, fourColorOf(g4, uid), 'abandon'), FOUR_ABANDON_MS);
+      fourBroadcast(g4, 'four:state', { events: [{ type: 'offline', color: fourColorOf(g4, uid), until: Date.now() + FOUR_ABANDON_MS }] });
+    }
     const g = games.get(userGame.get(user.id));
     if (g && g.status !== 'over') {
       const uid = user.id, deadline = Date.now() + RECONNECT_MS;
