@@ -991,3 +991,14 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .shop-item:not(.bundle) .ribbon.new { right: auto; left: 12px; background: linear-gradient(120deg, #ffd166, #ff8a3a); color: #1a0d00; }
 /* Mobile Leiste mit 7 Tabs */
 @media (max-width: 760px) { .nav button { padding: 6px 2px; flex: 1; min-width: 0; font-size: 10px; } .nav button span:last-child { overflow: hidden; text-overflow: ellipsis; max-width: 100%; } }
+/* ================================================================ Spielbares 3D-Brett */
+.board.mode3d { overflow: visible; }
+.board.mode3d > .b-squares, .board.mode3d > .b-hints, .board.mode3d > .b-pieces, .board.mode3d > .b-coords, .board.mode3d .move-badge, .board.mode3d .burst { visibility: hidden; }
+.board.mode3d > .webgl3d { position: absolute; inset: -14px; width: calc(100% + 28px); height: calc(100% + 28px); z-index: 6; display: block; touch-action: none; cursor: pointer; }
+.board.mode3d .promo { z-index: 20; }
+.board-frame.frame3d { background: radial-gradient(ellipse at 50% 60%, rgba(124, 92, 255, .12), transparent 70%); box-shadow: none; }
+.b3d-toggle { position: absolute; top: -12px; right: -12px; z-index: 30; padding: 6px 10px; border-radius: 99px; font-size: 12px; font-weight: 800; background: rgba(20, 23, 36, .92); border: 1px solid rgba(124, 92, 255, .55); color: var(--text); box-shadow: 0 8px 20px -8px rgba(0, 0, 0, .8); }
+.b3d-toggle[hidden] { display: none; }
+/* Echtes 3D-Brett (WebGL) hat Vorrang vor der CSS-Schräglage des Shop-3D-Bretts */
+.board-col:has(.board-frame.frame3d) { perspective: none; }
+.board-frame.b3d.frame3d { rotate: none; margin: 0; transform-style: flat; }

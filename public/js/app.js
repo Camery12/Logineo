@@ -1484,6 +1484,35 @@ function setupBoardLook(themeId, skins, orientation) {
   applyBoardTheme($('.board-frame'), themeId);
   board.setSkins(skins);
   board.setOrientation(orientation);
+  apply3d();
+}
+
+// ---------------------------------------------------------------- 3D-Brett (mit den 3D-Figuren)
+const has3dSkin = () => state.profile?.equipped.pieces === 'figuren3d';
+const want3d = () => has3dSkin() && localStorage.getItem('view3d') !== '0';
+window.__board = board; // für Tests
+async function apply3d() {
+  const frame = $('.board-frame');
+  let btn = $('#b3d-toggle');
+  if (!btn) {
+    btn = html('<button class="b3d-toggle" id="b3d-toggle" title="2D/3D umschalten"></button>');
+    frame.appendChild(btn);
+    btn.onclick = (e) => { e.stopPropagation(); localStorage.setItem('view3d', want3d() ? '0' : '1'); apply3d(); };
+  }
+  btn.hidden = !has3dSkin();
+  btn.textContent = want3d() ? '🟦 2D' : '🧊 3D';
+  if (!want3d()) { board.disable3d(); frame.classList.remove('frame3d'); return; }
+  try {
+    const { Board3D } = await import('./board3d.js');
+    if (!want3d()) return;
+    if (!board.view3d) board.view3d = new Board3D(board);
+    else board.view3d.refresh();
+    frame.classList.add('frame3d');
+  } catch (e) {
+    console.warn('3D-Brett nicht verfügbar', e);
+    board.disable3d(); frame.classList.remove('frame3d');
+    btn.hidden = true;
+  }
 }
 
 function playMoveSound(m, inCheck) {
@@ -1498,6 +1527,7 @@ function playMoveSound(m, inCheck) {
 function moveFx(m, inCheck, isCap) {
   const to = m?.to || m?.lastMove?.to;
   if (!to) return;
+  if (board.view3d) { if (inCheck) checkFlash($('.board-frame')); return; } // 3D: Gleiten, Schlagen & Schach zeigt das 3D-Brett selbst
   $$('.move-badge', board.el).forEach((e) => e.remove());
   const frame = $('.board-frame');
   const from = m?.from || m?.lastMove?.from;
@@ -1523,7 +1553,8 @@ async function mateFx() {
   const frame = $('.board-frame');
   const k = board.kingSquare(board.chess.turn());
   await wait(250);
-  burstAt(board, k, { kind: 'mate' });
+  if (board.view3d) board.view3d.mate(k);
+  else burstAt(board, k, { kind: 'mate' });
   shakeBoard(frame, true);
   frame.classList.add('mated');
   sound.boom();
@@ -1903,6 +1934,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function throwBoard() {
   const frame = $('.board-frame');
   sound.thud(); setTimeout(() => sound.capture(), 120);
+  if (board.view3d) { await board.view3d.toss(); await wait(150); board.load(board.fen, board.lastMove, false); return; }
   await tableFlip(frame, [...board.pieceEls.values()].map((p) => p.el));
   await wait(150);
   resetThrown(frame);

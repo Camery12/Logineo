@@ -55,9 +55,10 @@ export class Board {
     el.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
-  setOrientation(c) { this.orientation = c; this._layoutSquares(); this._render(false); }
-  setSkins(skins) { this.skins = { ...skins }; for (const [sq, p] of this.pieceEls) p.el.style.backgroundImage = pieceURL(p.type, p.color, this.skins[p.color]); }
-  setTheme(id) { applyBoardTheme(this.el, id); }
+  setOrientation(c) { this.orientation = c; this._layoutSquares(); this._render(false); this.view3d?.camPose(); }
+  setSkins(skins) { this.skins = { ...skins }; for (const [sq, p] of this.pieceEls) p.el.style.backgroundImage = pieceURL(p.type, p.color, this.skins[p.color]); this.view3d?.setSkins(); }
+  setTheme(id) { applyBoardTheme(this.el, id); this.view3d?.setTheme(id); }
+  disable3d() { this.view3d?.dispose(); this.view3d = null; }
 
   _xy(sq) {
     const f = sq.charCodeAt(0) - 97, r = +sq[1] - 1;
@@ -153,6 +154,7 @@ export class Board {
     requestAnimationFrame(() => requestAnimationFrame(() => { for (const p of keep.values()) p.el.classList.remove('no-anim'); }));
     if (!animate) for (const p of keep.values()) p.el.classList.add('no-anim');
     this._highlights();
+    this.view3d?.sync(animate);
   }
 
   _highlights() {
@@ -178,9 +180,11 @@ export class Board {
         this.hintLayer.appendChild(h);
       }
     }
+    this.view3d?.marks();
   }
 
   _pointSq(e) {
+    if (this.view3d) return this.view3d.pick(e);
     if (this.el.classList.contains('b3d')) {
       const hit = document.elementsFromPoint(e.clientX, e.clientY).find((n) => n.classList?.contains('sq') && this.el.contains(n));
       return hit?.dataset.sq || null;
