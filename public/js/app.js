@@ -76,6 +76,7 @@ socket.on('connect', async () => {
   if (!r.token) return;
   localStorage.setItem('token', r.token);
   setProfile(r.profile);
+  if (r.ban !== undefined && JSON.stringify(r.ban) !== JSON.stringify(state.ban ?? null)) showBan(r.ban);
   if (r.social) { const firstTime = !state.social; setSocial(r.social); if (firstTime && r.social.requests) notify({ icon: '👋', title: `${r.social.requests} Freundschaftsanfrage${r.social.requests > 1 ? 'n' : ''}`, text: 'Schau unter „Freunde“ nach.', actions: [{ label: 'Ansehen', cls: 'primary', onClick: () => go('friends') }] }); if (firstTime && r.social.unread) notify({ icon: '💬', title: `${r.social.unread} ungelesene Nachricht${r.social.unread > 1 ? 'en' : ''}`, text: 'Deine Freunde haben dir geschrieben.', actions: [{ label: 'Lesen', cls: 'primary', onClick: () => go('friends') }] }); }
   if (state.game?.spectator && state.game.active) socket.emit('watch:start', { id: state.game.id }, (rr) => { if (rr?.error) { toast('Das Live-Match ist vorbei.', 'warn'); state.game = null; go('play'); } });
   if (state.restarting) { state.restarting = false; if (!state.game?.active) toast('✅ Wieder verbunden', 'good'); }
@@ -236,13 +237,14 @@ $('#login-btn').onclick = () => openAuth('login');
 
 // ================================================================ Admin-Menü (nur für Admins sichtbar, Server prüft zusätzlich)
 socket.on('profile:refresh', ({ profile }) => { if (profile) setProfile(profile, { coinsAnim: true }); });
-$('#admin-btn').onclick = () => {
-  const ov = openOverlay(`<div class="admin">
-    <h2>🛠️ Admin-Menü</h2><p class="muted small">Spieler per Spielercode (8 Ziffern) oder Benutzername finden – Münzen und Elo geben oder abziehen.</p>
-    <form id="adm-find" class="adm-row"><input id="adm-q" placeholder="z. B. 58525408 oder loldonatforever" autocomplete="off"><button class="btn primary">Suchen</button></form>
-    <div id="adm-player"></div>
-    <div class="modal-actions"><button class="btn" data-x>Schließen</button></div></div>`, { wide: true });
-  $('[data-x]', ov.el).onclick = ov.close;
+$('#admin-btn').onclick = () => go('admin');
+// Admin-Panel › Spieler: Münzen, Elo, Profil säubern, Sperren
+function renderAdminPlayers(box, query = '') {
+  box.innerHTML = `<div class="admin">
+    <p class="muted small">Spieler per Spielercode (8 Ziffern) oder Benutzername finden – Münzen und Elo geben oder abziehen, Profil säubern, sperren.</p>
+    <form id="adm-find" class="adm-row"><input id="adm-q" placeholder="z. B. 58525408 oder loldonatforever" autocomplete="off" value="${esc(query)}"><button class="btn primary">Suchen</button></form>
+    <div id="adm-player"></div></div>`;
+  const ov = { el: box };
   const show = (pl) => {
     $('#adm-player', ov.el).innerHTML = `<div class="adm-card">
       <div class="adm-who">${avatar(pl.avatar, 48)}<div><b>@${esc(pl.name)}</b> ${pl.online ? '<i class="dot"></i>' : ''}<div class="muted small">Code ${pl.code} · <b id="adm-elo">${pl.rating}</b> Elo</div></div>
@@ -252,9 +254,23 @@ $('#admin-btn').onclick = () => {
       <h4 class="adm-h">🏆 Elo <span class="muted small">(${pl.rating})</span></h4>
       <div class="adm-quick">${[-100, -50, -10, 10, 50, 100].map((n) => `<button class="btn sm ${n > 0 ? 'good' : 'danger'}" data-elo="${n}">${n > 0 ? '+' : '−'}${Math.abs(n)}</button>`).join('')}</div>
       <form id="adm-elo-form" class="adm-row"><input id="adm-elo-amt" type="number" placeholder="Elo +/- (z. B. 250 oder -30)"><button class="btn primary" data-mode="add">± Ändern</button><button class="btn" data-mode="set" type="button" id="adm-elo-set">= Setzen</button></form>
-      <div class="adm-row"><button class="btn sm" id="adm-view">👁️ Profil ansehen</button><button class="btn sm danger" id="adm-clear">🧹 Song, Banner & Bio entfernen</button></div>
+      <div class="adm-row"><button class="btn sm" id="adm-view">👁️ Profil ansehen</button><button class="btn sm" id="adm-games">♟️ Partien</button><button class="btn sm danger" id="adm-clear">🧹 Song, Banner & Bio entfernen</button></div>
+      <h4 class="adm-h">⛔ Sperre ${pl.ban ? `<span class="tag ban-tag">gesperrt ${pl.ban.until === -1 ? 'dauerhaft' : `bis ${new Date(pl.ban.until).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`}</span>` : '<span class="muted small">(nicht gesperrt)</span>'}</h4>
+      <p class="muted small" style="margin:0 0 6px">Gesperrte Spieler können nicht online spielen, keine Lobbys öffnen und nicht chatten. Bots gehen weiter.</p>
+      <div class="adm-row"><input id="adm-ban-reason" maxlength="80" placeholder="Grund (optional, sieht der Spieler)" value="${esc(pl.ban?.reason || '')}"></div>
+      <div class="adm-quick">${[[60, '1 Std.'], [1440, '1 Tag'], [10080, '7 Tage'], [0, 'Dauerhaft']].map(([m, l]) => `<button class="btn sm danger" data-ban="${m}">${l}</button>`).join('')}${pl.ban ? '<button class="btn sm good" id="adm-unban">✅ Entsperren</button>' : ''}</div>
     </div>`;
     $('#adm-view', ov.el).onclick = () => showPlayerProfile(pl.id);
+    $('#adm-games', ov.el).onclick = () => { state.adminQuery = pl.code; renderAdmin('matches'); };
+    $$('[data-ban]', ov.el).forEach((b) => b.onclick = () => {
+      const mins = +b.dataset.ban;
+      confirmBox('Spieler sperren?', `@${esc(pl.name)} ${mins ? `für <b>${b.textContent}</b>` : '<b>dauerhaft</b>'} sperren?`, 'Sperren', async () => {
+        const r = await emit('admin:ban', { query: pl.code, minutes: mins, reason: $('#adm-ban-reason', ov.el).value });
+        if (r.error) return toast(esc(r.error), 'warn');
+        toast(`⛔ @${esc(pl.name)} gesperrt`, 'good'); show(r.player);
+      });
+    });
+    const ub = $('#adm-unban', ov.el); if (ub) ub.onclick = async () => { const r = await emit('admin:unban', { query: pl.code }); if (r.error) return toast(esc(r.error), 'warn'); toast(`✅ @${esc(pl.name)} entsperrt`, 'good'); show(r.player); };
     $('#adm-clear', ov.el).onclick = () => confirmBox('Profil säubern?', `Song, eigenes Bannerbild und Bio von @${esc(pl.name)} werden entfernt.`, 'Entfernen', async () => {
       const r = await emit('admin:clearProfile', { query: pl.code });
       r.error ? toast(esc(r.error), 'warn') : toast('🧹 Entfernt', 'good');
@@ -289,8 +305,201 @@ $('#admin-btn').onclick = () => {
     if (r.error) { $('#adm-player', ov.el).innerHTML = `<p class="form-error">${esc(r.error)}</p>`; return; }
     show(r.player);
   };
-  setTimeout(() => $('#adm-q', ov.el).focus(), 50);
-};
+  if (query) $('#adm-find', ov.el).requestSubmit();
+  else setTimeout(() => $('#adm-q', ov.el).focus(), 50);
+}
+
+// ================================================================ Admin-Panel
+const ADMIN_TABS = [['overview', '📊 Übersicht'], ['matches', '♟️ Matches'], ['players', '👤 Spieler'], ['live', '🔴 Live'], ['announce', '📢 Ankündigung']];
+function renderAdmin(tab = state.adminTab || 'overview') {
+  if (!state.profile?.admin) return go('play');
+  state.adminTab = tab;
+  if (state.view !== 'admin') { go('admin'); return; }
+  const root = $('#view-admin');
+  root.innerHTML = `<div class="section-title"><div><h2>🛠️ Admin-Panel</h2><p>Nur für Admins sichtbar.</p></div></div>
+    <div class="tabs adm-tabs">${ADMIN_TABS.map(([k, l]) => `<button data-atab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="card adm-panel" id="adm-panel"><div class="muted">Lade…</div></div>`;
+  $$('[data-atab]', root).forEach((b) => b.onclick = () => renderAdmin(b.dataset.atab));
+  const box = $('#adm-panel');
+  ({ overview: adminOverview, matches: adminMatches, players: (el) => renderAdminPlayers(el, state.adminPlayer || ''), live: adminLive, announce: adminAnnounce })[tab](box);
+}
+async function adminOverview(box) {
+  const r = await emit('admin:stats');
+  if (r.error) { box.innerHTML = `<p class="form-error">${esc(r.error)}</p>`; return; }
+  const tile = (v, l, sub = '') => `<div class="adm-tile"><b>${v ?? '–'}</b><span>${l}</span>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const top = (list, unit) => list.map((u, i) => `<li data-uid="${esc(u.id)}" class="clickable"><span>${i + 1}.</span><b>${esc(u.name)}</b><span>${fmtNum(u.value)} ${unit}</span></li>`).join('');
+  box.innerHTML = `<div class="adm-tiles">
+      ${tile(fmtNum(r.users), 'Spieler', `${r.registered} mit Konto · ${r.newToday} neu heute`)}
+      ${tile(r.online, 'online')}
+      ${tile(r.gamesNow + r.fourNow, 'laufende Partien', `${r.gamesNow} normal · ${r.fourNow} 4er · ${r.queue} in der Suche`)}
+      ${tile(r.matches.total != null ? fmtNum(r.matches.total) : '–', 'Partien im Archiv', `${r.matches.today ?? '–'} heute`)}
+      ${tile(fmtNum(r.coins), 'Münzen im Umlauf')}
+      ${tile(r.banned, 'gesperrt')}
+    </div>
+    <div class="adm-tops"><div><h4>💰 Reichste Spieler</h4><ol class="adm-top">${top(r.topCoins, 'Münzen')}</ol></div><div><h4>🏆 Höchstes Elo</h4><ol class="adm-top">${top(r.topElo, 'Elo')}</ol></div></div>`;
+  $$('li[data-uid]', box).forEach((li) => li.onclick = () => showPlayerProfile(li.dataset.uid));
+}
+const MATCH_ICON = { online: '⚔️', four: '👥', bot: '🤖' };
+function matchRow(m) {
+  const when = new Date(m.at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  let who = '', res = '';
+  if (m.type === 'online') {
+    const w = m.players?.w || {}, b = m.players?.b || {};
+    const d = (p) => (p.d ? `<span class="${p.d > 0 ? 'res-win' : 'res-loss'}">${p.d > 0 ? '+' : ''}${p.d}</span>` : '');
+    who = `<b>${esc(w.name || '?')}</b> ${d(w)} <span class="muted">vs</span> <b>${esc(b.name || '?')}</b> ${d(b)}`;
+    res = m.result === 'draw' ? '½–½' : m.result === 'w' ? '1–0' : '0–1';
+  } else if (m.type === 'four') {
+    const win = (m.players || []).find((p) => p.place === 1);
+    who = (m.players || []).map((p) => `<span class="${p.place === 1 ? 'res-win' : ''}">${p.bot ? '🤖' : ''}${esc(p.name)}</span>`).join(' · ');
+    res = win ? `🏆 ${esc(win.name)}` : '';
+  } else {
+    who = `<b>${esc(m.players.user.name)}</b> <span class="muted">vs</span> ${m.players.bot.avatar} ${esc(m.players.bot.name)}`;
+    res = { win: 'Sieg', loss: 'Niederlage', draw: 'Remis' }[m.result] || '';
+  }
+  return `<button class="adm-match ${m.annulled ? 'annulled' : ''}" data-mid="${esc(m.id)}">
+    <span class="am-icon">${MATCH_ICON[m.type]}</span>
+    <span class="am-who">${who}</span>
+    <span class="am-res"><b>${res}</b><small>${REASONS[m.reason] || (m.type === 'four' ? '4er-Schach' : '')} · ${m.plies || 0} Halbzüge</small></span>
+    <span class="am-when">${when}${m.variant === 'queens' ? ' · 👑' : ''}${m.unrated ? ' · ⚖️' : ''}${m.annulled ? ' · <b class="res-loss">annulliert</b>' : ''}</span></button>`;
+}
+async function adminMatches(box) {
+  const q = state.adminQuery || '', type = state.adminType || '';
+  box.innerHTML = `<form class="adm-row" id="am-search"><input id="am-q" placeholder="Spieler (Name oder Code) – leer = alle" value="${esc(q)}">
+      <select id="am-type" class="st-select" style="width:auto"><option value="">Alle</option><option value="online" ${type === 'online' ? 'selected' : ''}>⚔️ Online</option><option value="four" ${type === 'four' ? 'selected' : ''}>👥 4er</option><option value="bot" ${type === 'bot' ? 'selected' : ''}>🤖 Bots</option></select>
+      <button class="btn primary">Suchen</button></form>
+    <div class="adm-matches" id="am-list"><p class="muted">Lade…</p></div>`;
+  $('#am-search').onsubmit = (e) => { e.preventDefault(); state.adminQuery = $('#am-q').value.trim(); state.adminType = $('#am-type').value; adminMatches(box); };
+  const list = $('#am-list');
+  const load = async (before = null) => {
+    const r = await emit('admin:matches', { q, type, before });
+    if (r.error) { list.innerHTML = `<p class="form-error">${esc(r.error)}</p>`; return; }
+    if (!before) list.innerHTML = '';
+    list.querySelector('.am-more')?.remove();
+    if (!r.list.length && !before) { list.innerHTML = '<p class="muted">Keine Partien gefunden.</p>'; return; }
+    list.insertAdjacentHTML('beforeend', r.list.map(matchRow).join(''));
+    if (r.list.length >= 40) { list.insertAdjacentHTML('beforeend', '<button class="btn block am-more">Ältere laden</button>'); list.querySelector('.am-more').onclick = () => load(r.list.at(-1).at); }
+    $$('.adm-match:not([data-wired])', list).forEach((b) => { b.dataset.wired = 1; b.onclick = () => openReplay(b.dataset.mid, () => adminMatches(box)); });
+  };
+  load();
+}
+
+// Replay: Partie Zug für Zug nachspielen
+async function openReplay(id, onChange) {
+  const r = await emit('admin:match', { id });
+  if (r.error) return toast(esc(r.error), 'warn');
+  const m = r.match;
+  const ov = openOverlay('<div class="replay"></div>', { wide: true, onClose: () => clearInterval(auto) });
+  ov.el.classList.add('replay-modal');
+  const root = $('.replay', ov.el);
+  let auto = 0, i = 0, frames = [], fourBoardR = null;
+  // Stellungen vorab berechnen
+  if (m.type === 'four') {
+    const F = await import('./four.js');
+    const st = F.newState();
+    frames.push({ state: JSON.parse(JSON.stringify(st)), label: 'Start' });
+    for (const e of m.log || []) {
+      if (e.t === 'm') { F.play(st, e.c, e.from, e.to); st.last = { from: e.from, to: e.to, color: e.c }; frames.push({ state: JSON.parse(JSON.stringify(st)), label: `${COLOR_NAMES[e.c]}: ${F.sqName(e.from)}–${F.sqName(e.to)}` }); }
+      else { const wasTurn = st.turn === e.c; F.eliminate(st, e.c, e.reason); if (wasTurn) st.turn = F.nextColor(st, e.c); F.settle(st); frames.push({ state: JSON.parse(JSON.stringify(st)), label: `☠️ ${COLOR_NAMES[e.c]} raus (${e.reason})` }); }
+    }
+  } else {
+    const c = m.startFen ? new Chess(m.startFen) : new Chess();
+    frames.push({ fen: c.fen(), label: 'Start' });
+    const list = m.type === 'online' ? m.moves : (m.moves || []);
+    for (const mv of list) {
+      let res = null;
+      try { res = typeof mv === 'string' ? c.move(mv) : c.move({ from: mv.from, to: mv.to, promotion: mv.promotion || 'q' }); } catch { break; }
+      if (!res) break;
+      frames.push({ fen: c.fen(), label: res.san, last: { from: res.from, to: res.to } });
+    }
+  }
+  const title = m.type === 'online' ? `${esc(m.players.w.name)} (Weiß) vs ${esc(m.players.b.name)} (Schwarz)` : m.type === 'bot' ? `${esc(m.players.user.name)} vs ${esc(m.players.bot.name)}` : '4er-Schach';
+  const pInfo = m.type === 'online'
+    ? ['w', 'b'].map((k) => { const p = m.players[k]; return `<div class="rp-player">${k === 'w' ? '♔' : '♚'} <b>${esc(p.name)}</b> <span class="muted small">${p.ratingBefore} Elo</span> <span class="${p.d > 0 ? 'res-win' : p.d < 0 ? 'res-loss' : 'muted'}">${p.d > 0 ? '+' : ''}${p.d} Elo</span> · ${p.coins} 🪙</div>`; }).join('')
+    : m.type === 'four' ? (m.players || []).map((p) => `<div class="rp-player"><i class="fdot" style="--fc:${COLOR_HEX[p.color]}"></i> ${p.place}. <b>${esc(p.name)}</b>${p.bot ? ' 🤖' : ''} <span class="muted small">${p.reason || 'Sieger'}${p.coins ? ` · ${p.coins} 🪙` : ''}</span></div>`).join('')
+      : `<div class="rp-player"><b>${esc(m.players.user.name)}</b> spielte ${m.players.user.color === 'w' ? 'Weiß' : 'Schwarz'} · ${m.players.user.coins} 🪙</div>`;
+  root.innerHTML = `<div class="rp-head"><div><h3>${MATCH_ICON[m.type]} ${title}</h3><p class="muted small">${new Date(m.at).toLocaleString('de-DE')} · ${REASONS[m.reason] || ''}${m.unrated ? ` · ⚖️ nicht gewertet: ${esc(m.unrated)}` : ''}${m.variant === 'queens' ? ' · 👑 Queen-Modus' : ''}${m.annulled ? ` · <b class="res-loss">annulliert von ${esc(m.annulled.by)}</b>` : ''}</p></div><button class="btn sm" data-x>✕</button></div>
+    <div class="rp-body">
+      <div class="rp-board" id="rp-board"></div>
+      <div class="rp-side">${pInfo}
+        <div class="rp-moves" id="rp-moves">${frames.slice(1).map((f, k) => `<button data-k="${k + 1}">${m.type === 'four' ? '' : (k % 2 === 0 ? `<i>${k / 2 + 1}.</i>` : '')}${esc(f.label)}</button>`).join('')}</div>
+      </div>
+    </div>
+    <div class="rp-ctrl"><button class="btn" data-go="first">⏮</button><button class="btn" data-go="prev">◀</button><button class="btn primary" data-go="play">▶ Abspielen</button><button class="btn" data-go="next">▶</button><button class="btn" data-go="last">⏭</button>
+      <input type="range" id="rp-range" min="0" max="${frames.length - 1}" value="0"><span class="muted small" id="rp-pos"></span></div>
+    <div class="modal-actions">${m.type !== 'four' ? '<button class="btn" id="rp-pgn">📋 Züge kopieren</button>' : ''}${m.annulled ? '' : '<button class="btn danger" id="rp-annul">⚖️ Annullieren (Elo & Münzen zurück)</button>'}</div>`;
+  $('[data-x]', root).onclick = ov.close;
+  const boardBox = $('#rp-board');
+  if (m.type === 'four') { fourBoardR = new FourBoard(boardBox, {}); const b = findItem('board', state.profile?.equipped.board) || BOARDS[0]; fourBoardR.setTheme(b.light, b.dark); }
+  const show = (k) => {
+    i = Math.max(0, Math.min(frames.length - 1, k));
+    const f = frames[i];
+    if (m.type === 'four') fourBoardR.set({ ...f.state, status: 'over' }, 0, null);
+    else {
+      boardBox.innerHTML = '';
+      const mb = miniBoard(m.board || 'klassisch', { w: 'klassisch', b: 'klassisch' }, f.fen);
+      if (f.last) for (const sq of [f.last.from, f.last.to]) { const idx = (8 - +sq[1]) * 8 + (sq.charCodeAt(0) - 97); mb.children[idx]?.classList.add('rp-last'); }
+      boardBox.appendChild(mb);
+    }
+    $$('#rp-moves button').forEach((b) => b.classList.toggle('on', +b.dataset.k === i));
+    $('#rp-moves button.on')?.scrollIntoView({ block: 'nearest' });
+    $('#rp-range').value = i; $('#rp-pos').textContent = `${i} / ${frames.length - 1}`;
+  };
+  const stop = () => { clearInterval(auto); auto = 0; $('[data-go="play"]', root).textContent = '▶ Abspielen'; };
+  $$('[data-go]', root).forEach((b) => b.onclick = () => {
+    const g = b.dataset.go;
+    if (g === 'play') { if (auto) return stop(); if (i >= frames.length - 1) show(0); b.textContent = '⏸ Pause'; auto = setInterval(() => { if (i >= frames.length - 1) return stop(); show(i + 1); }, m.type === 'four' ? 450 : 800); return; }
+    stop(); show({ first: 0, prev: i - 1, next: i + 1, last: frames.length - 1 }[g]);
+  });
+  $$('#rp-moves button').forEach((b) => b.onclick = () => { stop(); show(+b.dataset.k); });
+  $('#rp-range').oninput = (e) => { stop(); show(+e.target.value); };
+  const pg = $('#rp-pgn');
+  if (pg) pg.onclick = () => copy(frames.slice(1).map((f, k) => (k % 2 === 0 ? `${k / 2 + 1}. ` : '') + f.label).join(' '), 'Züge kopiert!');
+  const an = $('#rp-annul');
+  if (an) an.onclick = () => confirmBox('Partie annullieren?', 'Elo, Münzen und Statistik aus dieser Partie werden bei allen Spielern zurückgenommen. Das kann man nicht rückgängig machen.', 'Annullieren', async () => {
+    const rr = await emit('admin:annul', { id: m.id });
+    if (rr.error) return toast(esc(rr.error), 'warn');
+    toast('⚖️ Partie annulliert – Elo & Münzen zurückgebucht', 'good');
+    ov.close(); onChange?.();
+  });
+  show(frames.length - 1);
+}
+async function adminLive(box) {
+  const r = await emit('admin:live');
+  if (r.error) { box.innerHTML = `<p class="form-error">${esc(r.error)}</p>`; return; }
+  const src = { random: 'Zufall', invite: 'Privat', challenge: 'Herausforderung' };
+  box.innerHTML = `<div class="adm-row" style="justify-content:space-between"><b>${r.two.length + r.four.length} laufende Partien</b><button class="btn sm" id="al-refresh">🔄 Aktualisieren</button></div>
+    ${r.two.length ? r.two.map((g) => `<div class="adm-match"><span class="am-icon">⚔️</span><span class="am-who"><b>${esc(g.players.w.name)}</b> <span class="muted">vs</span> <b>${esc(g.players.b.name)}</b></span><span class="am-res"><b>${src[g.source] || g.source}${g.variant === 'queens' ? ' · 👑' : ''}</b><small>${g.moves} Halbzüge · 👀 ${g.watchers}</small></span><button class="btn sm primary" data-watch-any="${esc(g.id)}">👀 Zuschauen</button></div>`).join('') : '<p class="muted">Keine normalen Partien.</p>'}
+    ${r.four.length ? `<h4 class="adm-h">👥 4er-Schach</h4>${r.four.map((g) => `<div class="adm-match"><span class="am-icon">👥</span><span class="am-who">${g.players.map((p) => `<span class="${p.alive ? '' : 'muted'}">${p.bot ? '🤖' : ''}${esc(p.name)}${p.alive ? '' : ' ☠️'}</span>`).join(' · ')}</span><span class="am-res"><small>${g.ply} Halbzüge</small></span></div>`).join('')}` : ''}`;
+  $('#al-refresh').onclick = () => adminLive(box);
+  $$('[data-watch-any]', box).forEach((b) => b.onclick = () => watchGame(b.dataset.watchAny));
+}
+function adminAnnounce(box) {
+  box.innerHTML = `<p class="muted">Die Nachricht erscheint sofort als großes Popup bei allen, die gerade online sind (${state.stats.online} Spieler).</p>
+    <form id="ann-form" class="ann-form"><textarea id="ann-text" maxlength="300" rows="3" placeholder="z. B. Heute Abend um 18 Uhr Turnier! 🏆"></textarea>
+    <button class="btn primary">📢 An alle senden</button></form>`;
+  $('#ann-form').onsubmit = (e) => {
+    e.preventDefault();
+    const text = $('#ann-text').value.trim();
+    if (!text) return;
+    confirmBox('Ankündigung senden?', `„${esc(text)}“ an alle ${state.stats.online} Spieler senden?`, 'Senden', async () => {
+      const r = await emit('admin:announce', { text });
+      if (r.error) return toast(esc(r.error), 'warn');
+      toast(`📢 Gesendet an ${r.reached} Spieler`, 'good'); $('#ann-text').value = '';
+    });
+  };
+}
+// Ankündigung / Sperre empfangen
+socket.on('announce', ({ text, by }) => {
+  sound.notify();
+  notify({ icon: '📢', title: 'Ankündigung', text: `${esc(text)}<br><small class="muted">– ${esc(by)}</small>`, timeout: 20000 });
+});
+function showBan(b) {
+  state.ban = b;
+  if (!b) return;
+  const bis = b.until === -1 ? 'auf Dauer' : `bis ${new Date(b.until).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+  notify({ icon: '⛔', title: `Du bist ${bis} gesperrt`, text: `${b.reason ? `Grund: ${esc(b.reason)}<br>` : ''}Online-Spiele und Chat sind gesperrt. Bots und Training gehen weiter.`, timeout: 0 });
+}
+socket.on('banned', showBan);
 
 // ================================================================ Profile anderer Spieler ansehen
 // Profile kurz zwischenspeichern (und schon beim Antippen laden), damit sie sofort aufgehen
@@ -368,7 +577,8 @@ function animateNumber(el, from, to) {
 
 // ================================================================ Navigation
 function go(view) {
-  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four', 'friends'].includes(view)) view = 'play';
+  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin'].includes(view)) view = 'play';
+  if (view === 'admin' && !state.profile?.admin) view = 'play';
   if (view === 'game' && !state.game && !state.bot) view = 'play';
   if (view === 'four' && !state.four) view = 'play';
   if (state.view === 'four' && view !== 'four' && fourActive()) { toast('Du spielst gerade 4er-Schach – gib erst auf oder spiel zu Ende.', 'warn'); return; }
@@ -384,6 +594,7 @@ function go(view) {
   if (view === 'shop') renderShop();
   if (view === 'profile') renderProfile();
   if (view === 'friends') renderFriends();
+  if (view === 'admin') renderAdmin(state.adminTab || 'overview');
   if (view === 'leaderboard') renderLeaderboard();
   if (view === 'play') renderPlay();
   window.scrollTo({ top: 0, behavior: 'smooth' });

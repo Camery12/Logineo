@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.12.0';
+export const VERSION = '1.13.0';
 export const VERSION_DATE = '2026-11-11';
 export const CHANGELOG = [
+  ['1.13.0', 'Admin-Panel: Übersicht, Archiv aller Partien mit Replay, Partien annullieren, Spieler sperren, Ankündigungen an alle, alle Live-Partien zuschauen'],
   ['1.12.0', 'Freunde & Chat: Spieler suchen, Freundschaftsanfragen, privat chatten, Popups bei neuen Nachrichten und Anfragen, Freunde direkt herausfordern'],
   ['1.11.3', 'Tab-Symbol jetzt grau'],
   ['1.11.2', 'Neues Tab-Symbol (L) – auch für den iPad-Homescreen'],

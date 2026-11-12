@@ -28,7 +28,7 @@ const freshBoot = () => Date.now() - BOOT < 20 * 60_000;
 // Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
 const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-let mongoUsers = null, mongoMusic = null, mongoGames = null, mongoChats = null;
+let mongoUsers = null, mongoMusic = null, mongoGames = null, mongoChats = null, mongoMatches = null;
 const INSTANCE = crypto.randomUUID(); // jede Server-Instanz hat eine eigene Kennung
 const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
 
@@ -41,6 +41,10 @@ async function loadDb() {
     mongoMusic = client.db(process.env.MONGODB_DB || 'schacharena').collection('music');
     mongoGames = client.db(process.env.MONGODB_DB || 'schacharena').collection('games');
     mongoChats = client.db(process.env.MONGODB_DB || 'schacharena').collection('chats');
+    mongoMatches = client.db(process.env.MONGODB_DB || 'schacharena').collection('matches');
+    await mongoMatches.createIndex({ id: 1 }, { unique: true });
+    await mongoMatches.createIndex({ at: -1 });
+    await mongoMatches.createIndex({ uids: 1 });
     await mongoChats.createIndex({ id: 1 }, { unique: true });
     await mongoGames.createIndex({ id: 1 }, { unique: true });
     await mongoGames.createIndex({ uids: 1 });
@@ -57,6 +61,7 @@ async function loadDb() {
     db.users ||= {};
     db.music ||= {};
     db.chats ||= {};
+    db.matches ||= [];
     console.log(`⚠️  Keine MONGODB_URI gesetzt – speichere in ${DB_FILE} (geht bei Render-Free bei Updates verloren)`);
   }
 }
@@ -329,7 +334,7 @@ function startMatch(aId, bId, timeMs, source, variant = null) {
   for (const [code, r] of rooms) if (r.hostId === aId || r.hostId === bId) rooms.delete(code);
   const flip = Math.random() < 0.5;
   const g = {
-    id: crypto.randomUUID(), source,
+    id: crypto.randomUUID(), source, createdAt: Date.now(),
     players: { w: flip ? aId : bId, b: flip ? bId : aId },
     chess: new Chess(VARIANTS[variant] || START_FEN), variant: VARIANTS[variant] ? variant : null, startFen: VARIANTS[variant] || null,
     timeMs, clock: { w: timeMs, b: timeMs }, lastTick: Date.now(), started: false,
@@ -373,7 +378,7 @@ function sendState(g, extra = {}) {
   const last = g.chess.history({ verbose: true }).at(-1);
   const payload = { id: g.id, fen: g.chess.fen(), lastMove: last ? { from: last.from, to: last.to, san: last.san } : null, clock: clockState(g), drawOffer: g.drawOffer, ...extra };
   for (const c of ['w', 'b']) emitTo(g.players[c], 'game:state', payload);
-  if (g.source === 'random') io.to(watchRoom(g)).emit('game:state', payload);
+  io.to(watchRoom(g)).emit('game:state', payload);
   persistGame(g);
 }
 
@@ -443,6 +448,7 @@ function endGame(g, result, reason) {
     const before = u.rating;
     u.coins += coins; u.rating = Math.max(0, u.rating + d);
     d = u.rating - before; // bei 0 Elo kann man nicht weiter fallen
+    (g.arch ||= {})[color] = { id: u.id, name: u.name, ratingBefore: before, d, coins, outcome, counted: !(reason === 'abandon' && outcome === 'win') && !unrated, mate: outcome === 'win' && reason === 'checkmate' && !unrated };
     if (!(reason === 'abandon' && outcome === 'win') && !unrated) {
       u.stats.games++; u.stats[outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws']++;
     }
@@ -458,7 +464,12 @@ function endGame(g, result, reason) {
       skins: { w: W.equipped.pieces, b: B.equipped.pieces }, profile: priv(u),
     });
   }
-  if (g.source === 'random') {
+  archiveMatch({
+    id: g.id, type: 'online', source: g.source, variant: g.variant || null, startFen: g.startFen || null, at: Date.now(), startedAt: g.createdAt || null,
+    timeMs: g.timeMs, board: g.board, result, reason, unrated: unrated || null, plies, moves: g.chess.history(),
+    uids: [W.id, B.id], players: g.arch, winnerName: winner?.name || null,
+  });
+  {
     io.to(watchRoom(g)).emit('game:over', {
       id: g.id, result, reason, spectator: true, finisher, winnerName: winner?.name || null, fen: g.chess.fen(), board: g.board,
       skins: { w: W.equipped.pieces, b: B.equipped.pieces }, players: { w: pub(W), b: pub(B) },
@@ -567,7 +578,7 @@ function fourMaterial(g, c) { let m = 0; for (const p of g.state.board) if (p &&
 // Ende nach Punkten: wer am wenigsten Material hat, scheidet zuerst aus
 function fourByMaterial(g) {
   const alive = [0, 1, 2, 3].filter((c) => g.state.alive[c]).sort((a, b) => fourMaterial(g, a) - fourMaterial(g, b));
-  for (const c of alive.slice(0, -1)) Four.eliminate(g.state, c, 'points');
+  for (const c of alive.slice(0, -1)) { (g.log ||= []).push({ t: 'x', c, reason: 'points' }); Four.eliminate(g.state, c, 'points'); }
   g.state.over = true;
 }
 // Kein Mensch mehr dabei: Rest sofort ausspielen statt minutenlang Bots zuzuschauen
@@ -578,12 +589,14 @@ function fourFastForward(g) {
     if (!m) break;
     const res = Four.play(g.state, c, m.from, m.to);
     if (!res) break;
+    (g.log ||= []).push({ t: 'm', c, from: m.from, to: m.to });
     g.quiet = res.events.some((e) => e.type === 'capture') ? 0 : (g.quiet || 0) + 1;
   }
   if (!g.state.over) fourByMaterial(g);
   endFour(g);
 }
 function fourAfterMove(g, color, res) {
+  (g.log ||= []).push({ t: 'm', c: color, from: res.move.from, to: res.move.to });
   const now = Date.now();
   g.clock[color] -= now - g.lastTick; g.lastTick = now; g.moves[color]++;
   g.quiet = res.events.some((e) => e.type === 'capture') ? 0 : (g.quiet || 0) + 1;
@@ -599,6 +612,7 @@ function fourEliminate(g, color, reason) {
   const now = Date.now();
   g.clock[g.state.turn] -= now - g.lastTick; g.lastTick = now;
   const wasTurn = g.state.turn === color;
+  (g.log ||= []).push({ t: 'x', c: color, reason });
   Four.eliminate(g.state, color, reason);
   const events = [{ type: 'out', color, reason }];
   if (wasTurn) g.state.turn = Four.nextColor(g.state, color);
@@ -630,10 +644,16 @@ function endFour(g) {
     const coins = unrated ? 0 : Math.round((FOUR_REWARDS[place] * factor) / 5) * 5;
     u.coins += coins;
     if (!unrated) { u.stats.four ||= { games: 0, wins: 0 }; u.stats.four.games++; if (place === 0) u.stats.four.wins++; }
+    (g.arch ||= {})[c] = { coins, counted: !unrated, win: place === 0 };
     u.history.unshift({ type: 'four', opponent: '4er-Schach', oppAvatar: { type: 'emoji', value: '👥', color: '#334' }, outcome: place === 0 ? 'win' : 'loss', reason: place === 0 ? 'four-win' : 'four-place', place: place + 1, coins, rating: 0, moves: g.state.ply, at: Date.now(), ...(unrated ? { unrated } : {}) });
     u.history = u.history.slice(0, 50);
     emitTo(uid, 'four:over', { ...fourPayload(g, uid), ranking: table, place: place + 1, coins, unrated, profile: priv(u), bots: 4 - g.humans });
   }
+  archiveMatch({
+    id: g.id, type: 'four', at: Date.now(), timeMs: g.timeMs, humans: g.humans, plies: g.state.ply, log: g.log || [],
+    uids: g.players.filter((p) => p.uid).map((p) => p.uid),
+    players: g.players.map((p, c) => ({ color: c, uid: p.uid || null, name: players[c].name, bot: !!p.bot, place: ranking.indexOf(c) + 1, reason: reasons[c] || null, ...(g.arch?.[c] || {}) })),
+  });
   save();
   for (const p of g.players) if (p.uid && userFour.get(p.uid) === g.id) userFour.delete(p.uid);
   setTimeout(() => games4.delete(g.id), 60_000);
@@ -812,6 +832,50 @@ async function userByToken(token) {
   return fresh;
 }
 
+// ---------------------------------------------------------------- Match-Archiv (für Admins: alle Partien, Replays, Annullieren)
+async function archiveMatch(doc) {
+  try {
+    if (mongoMatches) await mongoMatches.replaceOne({ id: doc.id }, doc, { upsert: true });
+    else { db.matches ||= []; db.matches.unshift(doc); if (db.matches.length > 3000) db.matches.length = 3000; save(); }
+  } catch (e) { console.error('Archiv:', e.message); }
+}
+async function matchGet(id) {
+  if (mongoMatches) { const d = await mongoMatches.findOne({ id }); if (d) delete d._id; return d; }
+  return (db.matches || []).find((m) => m.id === id) || null;
+}
+async function matchUpdate(doc) {
+  if (mongoMatches) await mongoMatches.replaceOne({ id: doc.id }, doc, { upsert: true });
+  else { const i = db.matches.findIndex((m) => m.id === doc.id); if (i >= 0) db.matches[i] = doc; save(); }
+}
+async function matchList({ uids = null, type = null, before = null, limit = 40 } = {}) {
+  if (mongoMatches) {
+    const q = {};
+    if (uids) q.uids = { $in: uids };
+    if (type) q.type = type;
+    if (before) q.at = { $lt: before };
+    return (await mongoMatches.find(q, { projection: { moves: 0, log: 0, _id: 0 } }).sort({ at: -1 }).limit(limit).toArray());
+  }
+  return (db.matches || []).filter((m) => (!uids || m.uids.some((u) => uids.includes(u))) && (!type || m.type === type) && (!before || m.at < before))
+    .slice(0, limit).map(({ moves, log, ...rest }) => rest);
+}
+async function matchCounts() {
+  const day = new Date(); day.setHours(0, 0, 0, 0);
+  if (mongoMatches) {
+    try { return { total: await mongoMatches.countDocuments({}), today: await mongoMatches.countDocuments({ at: { $gte: day.getTime() } }) }; } catch { return { total: null, today: null }; }
+  }
+  const all = db.matches || [];
+  return { total: all.length, today: all.filter((m) => m.at >= day.getTime()).length };
+}
+
+// Sperren: gesperrte Spieler dürfen nicht online spielen und nicht chatten
+const banInfo = (u) => (u?.ban && (u.ban.until === -1 || u.ban.until > Date.now()) ? { until: u.ban.until, reason: u.ban.reason || '' } : null);
+function banErr(u) {
+  const b = banInfo(u);
+  if (!b) return null;
+  const bis = b.until === -1 ? 'auf Dauer' : `bis ${new Date(b.until).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`;
+  return `⛔ Du bist ${bis} gesperrt${b.reason ? ` (${b.reason})` : ''}. Bots und Training gehen weiter.`;
+}
+
 // ---------------------------------------------------------------- Freunde & Chat
 const MAX_FRIENDS = 200, CHAT_KEEP = 200, CHAT_LEN = 300;
 const social = (u) => { u.friends ||= []; u.freqIn ||= []; u.freqOut ||= []; u.unread ||= {}; return u; };
@@ -875,7 +939,7 @@ io.on('connection', (socket) => {
     const old = online.get(user.id);
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
-    ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, social: socialSummary(user) });
+    ack?.({ token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, social: socialSummary(user), ban: banInfo(user) });
     notifyFriends(user, true);
     // Laufendes 4er-Spiel fortsetzen
     const g4 = fourGameOf(user.id);
@@ -996,8 +1060,107 @@ io.on('connection', (socket) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
     const t = findTarget(query);
     if (!t) return ack?.({ error: 'Kein Spieler mit diesem Code oder Namen gefunden.' });
-    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) } });
+    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id), ban: banInfo(t) } });
   }));
+  // ---------------- Admin-Panel
+  const adminOnly = (fn) => need(async (data = {}, ack) => {
+    if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
+    try { await fn(data, ack); } catch (e) { console.error('[admin]', e); ack?.({ error: 'Fehler: ' + e.message }); }
+  });
+  socket.on('admin:stats', adminOnly(async (_, ack) => {
+    const all = Object.values(db.users);
+    const day = new Date(); day.setHours(0, 0, 0, 0);
+    const top = (key) => [...all].sort((a, b) => b[key] - a[key]).slice(0, 5).map((u) => ({ id: u.id, name: u.name, value: u[key] }));
+    ack?.({
+      users: all.length, registered: all.filter((u) => u.pass).length, newToday: all.filter((u) => u.createdAt >= day.getTime()).length,
+      online: online.size, gamesNow: [...games.values()].filter((g) => g.status === 'playing').length, fourNow: [...games4.values()].filter((g) => g.status === 'playing').length,
+      queue: queue.length, banned: all.filter((u) => banInfo(u)).length, coins: all.reduce((s, u) => s + (u.coins || 0), 0),
+      matches: await matchCounts(), topCoins: top('coins'), topElo: top('rating'),
+    });
+  }));
+  socket.on('admin:matches', adminOnly(async ({ q = '', type = '', before = null } = {}, ack) => {
+    let uids = null;
+    const qs = String(q || '').trim();
+    if (qs) {
+      const exact = findTarget(qs);
+      uids = exact ? [exact.id] : Object.values(db.users).filter((u) => nameKey(u.name).includes(nameKey(qs))).slice(0, 30).map((u) => u.id);
+      if (!uids.length) return ack?.({ list: [] });
+    }
+    const list = await matchList({ uids, type: ['online', 'four', 'bot'].includes(type) ? type : null, before: before ? Number(before) : null, limit: 40 });
+    ack?.({ list });
+  }));
+  socket.on('admin:match', adminOnly(async ({ id } = {}, ack) => {
+    const m = await matchGet(String(id || ''));
+    ack?.(m ? { match: m } : { error: 'Partie nicht gefunden.' });
+  }));
+  socket.on('admin:annul', adminOnly(async ({ id } = {}, ack) => {
+    const m = await matchGet(String(id || ''));
+    if (!m) return ack?.({ error: 'Partie nicht gefunden.' });
+    if (m.annulled) return ack?.({ error: 'Diese Partie wurde schon annulliert.' });
+    const touched = [];
+    const revert = (uid, { d = 0, coins = 0 } = {}, statsFn) => {
+      const u = db.users[uid]; if (!u) return;
+      u.rating = Math.max(0, u.rating - d); u.coins = Math.max(0, u.coins - coins);
+      statsFn?.(u);
+      touched.push({ u, d, coins });
+    };
+    if (m.type === 'online') {
+      for (const pl of Object.values(m.players || {})) revert(pl.id, pl, (u) => {
+        if (!pl.counted) return;
+        u.stats.games = Math.max(0, u.stats.games - 1);
+        const k = pl.outcome === 'win' ? 'wins' : pl.outcome === 'loss' ? 'losses' : 'draws';
+        u.stats[k] = Math.max(0, u.stats[k] - 1);
+        if (pl.mate) u.stats.mates = Math.max(0, u.stats.mates - 1);
+      });
+    } else if (m.type === 'four') {
+      for (const pl of m.players || []) if (pl.uid) revert(pl.uid, { coins: pl.coins || 0 }, (u) => { if (pl.counted && u.stats.four) { u.stats.four.games = Math.max(0, u.stats.four.games - 1); if (pl.win) u.stats.four.wins = Math.max(0, u.stats.four.wins - 1); } });
+    } else if (m.type === 'bot') {
+      const pl = m.players.user;
+      revert(pl.id, { coins: pl.coins || 0 }, (u) => { u.stats.botGames = Math.max(0, u.stats.botGames - 1); if (pl.outcome === 'win') { u.stats.botWins = Math.max(0, u.stats.botWins - 1); u.stats.mates = Math.max(0, u.stats.mates - 1); } });
+    }
+    m.annulled = { at: Date.now(), by: user.name };
+    await matchUpdate(m);
+    save();
+    for (const t of touched) {
+      emitTo(t.u.id, 'profile:refresh', { profile: priv(t.u) });
+      if (t.d || t.coins) emitTo(t.u.id, 'toast', { type: 'warn', text: `⚖️ Ein Admin hat eine Partie annulliert: ${t.d ? `${t.d > 0 ? '−' : '+'}${Math.abs(t.d)} Elo` : ''}${t.d && t.coins ? ', ' : ''}${t.coins ? `${t.coins > 0 ? '−' : '+'}${Math.abs(t.coins)} Münzen` : ''}.` });
+    }
+    console.log(`[admin] ${user.name} hat Partie ${m.id} (${m.type}) annulliert`);
+    ack?.({ ok: true, match: m });
+  }));
+  socket.on('admin:ban', adminOnly(async ({ query, minutes = 60, reason = '' } = {}, ack) => {
+    const t = findTarget(query);
+    if (!t) return ack?.({ error: 'Spieler nicht gefunden.' });
+    if (isAdmin(t)) return ack?.({ error: 'Admins kann man nicht sperren.' });
+    const mins = Math.trunc(Number(minutes));
+    t.ban = { until: mins > 0 ? Date.now() + mins * 60_000 : -1, reason: clean(reason, 80), by: user.name, at: Date.now() };
+    queue = queue.filter((q) => q.userId !== t.id);
+    save();
+    emitTo(t.id, 'banned', banInfo(t));
+    console.log(`[admin] ${user.name} sperrt ${t.name} (${mins > 0 ? mins + ' Min' : 'dauerhaft'})`);
+    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id), ban: banInfo(t) } });
+  }));
+  socket.on('admin:unban', adminOnly(async ({ query } = {}, ack) => {
+    const t = findTarget(query);
+    if (!t) return ack?.({ error: 'Spieler nicht gefunden.' });
+    delete t.ban; save();
+    emitTo(t.id, 'banned', null);
+    emitTo(t.id, 'toast', { type: 'good', text: '✅ Deine Sperre wurde aufgehoben.' });
+    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id), ban: null } });
+  }));
+  socket.on('admin:announce', adminOnly(async ({ text } = {}, ack) => {
+    const msg = clean(text, 300);
+    if (!msg) return ack?.({ error: 'Leere Ankündigung.' });
+    io.emit('announce', { text: msg, by: user.name, at: Date.now() });
+    console.log(`[admin] Ankündigung von ${user.name}: ${msg}`);
+    ack?.({ ok: true, reached: online.size });
+  }));
+  socket.on('admin:live', adminOnly(async (_, ack) => {
+    const two = [...games.values()].filter((g) => g.status === 'playing').map((g) => ({ id: g.id, type: 'online', source: g.source, variant: g.variant || null, moves: g.chess.history().length, players: { w: pub(db.users[g.players.w]), b: pub(db.users[g.players.b]) }, watchers: watcherCount(g) }));
+    const four = [...games4.values()].filter((g) => g.status === 'playing').map((g) => ({ id: g.id, type: 'four', ply: g.state.ply, players: fourPlayers(g).map((p, c) => ({ name: p.name, bot: !!p.bot, alive: g.state.alive[c] })) }));
+    ack?.({ two, four });
+  }));
+
   // Admin: Profil mit Bilanz gegen jeden Gegner
   socket.on('admin:profile', need(({ id, query } = {}, ack) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
@@ -1115,6 +1278,7 @@ io.on('connection', (socket) => {
 
   // --- Einladungscode (6-stellig, zufällig)
   socket.on('room:create', need(({ timeMs = 600_000, variant = null } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);
     let code; do code = digits(6); while (rooms.has(code) || lobbies4.has(code));
@@ -1127,7 +1291,7 @@ io.on('connection', (socket) => {
   });
   socket.on('watch:start', ({ id } = {}, ack) => {
     const g = games.get(id);
-    if (!g || g.status !== 'playing' || g.source !== 'random') return ack?.({ error: 'Dieses Match läuft nicht mehr.' });
+    if (!g || g.status !== 'playing' || (g.source !== 'random' && !isAdmin(user))) return ack?.({ error: 'Dieses Match läuft nicht mehr.' });
     if (user && (g.players.w === user.id || g.players.b === user.id)) return ack?.({ error: 'Das ist dein eigenes Spiel.' });
     for (const r of socket.rooms) if (r.startsWith('watch:')) socket.leave(r);
     socket.join(watchRoom(g));
@@ -1143,6 +1307,7 @@ io.on('connection', (socket) => {
 
   // --- 4er-Schach
   socket.on('four:create', need(({ timeMs = 300_000 } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
     let code; do code = digits(6); while (rooms.has(code) || lobbies4.has(code));
     const l = { code, hostId: user.id, seats: [user.id], timeMs: ALLOWED_TIMES.includes(timeMs) && timeMs ? timeMs : 300_000 };
@@ -1159,6 +1324,7 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
   }));
   socket.on('four:solo', need(({ timeMs = 300_000 } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
     startFour([user.id], ALLOWED_TIMES.includes(timeMs) && timeMs ? timeMs : 300_000);
     ack?.({ ok: true });
@@ -1186,6 +1352,7 @@ io.on('connection', (socket) => {
   socket.on('room:cancel', need(() => { for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c); }));
 
   socket.on('code:join', need(({ code } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     code = String(code || '').replace(/\D/g, '');
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     const lob = lobbies4.get(code);
@@ -1239,6 +1406,7 @@ io.on('connection', (socket) => {
     ack?.({ friends, incoming: get(user.freqIn).map((u) => ({ ...pub(u), online: online.has(u.id) })), outgoing: get(user.freqOut).map((u) => ({ ...pub(u), online: online.has(u.id) })), ...socialSummary(user) });
   }));
   socket.on('friend:request', need(({ id } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     const t = db.users[id];
     if (!t || t.id === user.id) return ack?.({ error: 'Spieler nicht gefunden.' });
     social(user); social(t);
@@ -1296,6 +1464,7 @@ io.on('connection', (socket) => {
   socket.on('chat:read', need(({ id } = {}) => { if (social(user).unread[id]) { delete user.unread[id]; save(); } }));
   const sent = [];
   socket.on('chat:send', need(async ({ id, text } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     const t = db.users[id];
     if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Du kannst nur Freunden schreiben.' });
     const msg = String(text ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, CHAT_LEN);
@@ -1318,6 +1487,7 @@ io.on('connection', (socket) => {
   }));
   // Freund direkt zu einer Partie herausfordern
   socket.on('friend:challenge', need(({ id } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     const t = db.users[id];
     if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Nur Freunde kannst du so herausfordern.' });
     if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
@@ -1341,6 +1511,7 @@ io.on('connection', (socket) => {
 
   // --- Zufälliges Match
   socket.on('queue:join', need((_, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     queue = queue.filter((q) => q.userId !== user.id && online.has(q.userId));
     // Gegner mit möglichst ähnlicher Wertung
@@ -1431,6 +1602,10 @@ io.on('connection', (socket) => {
     user.history.unshift(hEntry);
     user.history = user.history.slice(0, 50);
     save();
+    archiveMatch({
+      id: crypto.randomUUID(), type: 'bot', at: now, uids: [user.id], moves: moves.map((m) => ({ from: m.from, to: m.to, promotion: m.promotion })),
+      result: outcome, reason, plies: moves.length, players: { user: { id: user.id, name: user.name, color, coins, outcome }, bot: { id: bot.id, name: bot.name, avatar: bot.avatar } },
+    });
     ack?.({ coins, outcome, profile: priv(user) });
   }));
 
