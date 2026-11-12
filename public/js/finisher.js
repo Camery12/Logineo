@@ -460,8 +460,13 @@ function run({ finisher = 'klassisch', fen, boardTheme = 'klassisch', skins = { 
   }
   if (warm) {
     // Nur Shader kompilieren und ein Bild rendern – unsichtbar
-    try { camera.position.set(0, 7, 8); camera.lookAt(0, 0, 0); renderer.compile(scene, camera); composer.render(); } catch { /* egal */ }
-    requestAnimationFrame(() => { teardown(); done(); });
+    // Shader möglichst parallel/asynchron übersetzen, damit die Seite dabei nicht hängt
+    camera.position.set(0, 7, 8); camera.lookAt(0, 0, 0);
+    const finishWarm = () => { try { composer.render(); } catch { /* egal */ } requestAnimationFrame(() => { teardown(); done(); }); };
+    try {
+      if (renderer.compileAsync) renderer.compileAsync(scene, camera).then(finishWarm, finishWarm);
+      else { renderer.compile(scene, camera); finishWarm(); }
+    } catch { finishWarm(); }
     return;
   }
 

@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.11.0';
+export const VERSION = '1.11.1';
 export const VERSION_DATE = '2026-11-11';
 export const CHANGELOG = [
+  ['1.11.1', 'iPad-Fix: Menüleiste unten und Kopfzeile oben bleiben an ihrem Platz, Live-Karte ist immer sichtbar, Seite hängt nicht mehr beim Vorbereiten der Finisher'],
   ['1.11.0', 'Live zuschauen bei Zufallsmatches (mit Finisher und Zuschauerzahl), Admins sehen in jedem Profil die Bilanz gegen jeden Gegner und Bot'],
   ['1.10.1', 'Admin-Menü: Elo geben, abziehen oder direkt setzen'],
   ['1.10.0', 'Neuer Spielmodus 4er-Schach: vier Spieler auf einem 14×14-Brett, jeder gegen jeden – mit Lobby-Code, freie Plätze übernehmen Bots, oder direkt gegen 3 Bots'],

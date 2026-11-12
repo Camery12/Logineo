@@ -439,7 +439,7 @@ function renderPlay() {
       </div>
       <div class="hero-board"><div class="hero-tilt"></div></div>
     </div>
-    <div class="card live-card" id="card-live" hidden></div>
+    <div class="card live-card idle" id="card-live"></div>
     <div class="card four-card" id="card-four"></div>
     <div class="play-grid">
       <div class="card play-card" id="card-random"></div>
@@ -573,8 +573,11 @@ async function refreshLive() {
   const { list = [] } = await emit('live:list');
   const mine = state.profile?.id;
   const games = list.filter((g) => g.players.w.id !== mine && g.players.b.id !== mine);
-  el.hidden = !games.length;
-  if (!games.length) { el.innerHTML = ''; return; }
+  el.classList.toggle('idle', !games.length);
+  if (!games.length) {
+    el.innerHTML = `<div class="live-head"><span class="live-dot off"></span><h3>Live zuschauen</h3><span class="muted small">Gerade läuft kein Zufallsmatch – sobald jemand über „Gegner suchen“ spielt, kannst du hier live zuschauen.</span></div>`;
+    return;
+  }
   el.innerHTML = `<div class="live-head"><span class="live-dot"></span><h3>Live zuschauen</h3><span class="muted small">${games.length} Zufallsmatch${games.length > 1 ? 'es' : ''} läuft gerade</span></div>
     <div class="live-list">${games.slice(0, 6).map((g) => `<button class="live-item" data-watch="${esc(g.id)}">
       <span class="lv-p">${avatar(g.players.w.avatar, 30)}<b>${esc(g.players.w.name)}</b><small>${g.players.w.rating}</small></span>

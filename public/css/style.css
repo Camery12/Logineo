@@ -20,9 +20,11 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; min-height: 100%; overflow-x: hidden; }
+html { margin: 0; min-height: 100%; overflow-x: hidden; }
+/* clip statt hidden: macht den body NICHT zum Scroll-Bereich – sonst rutschen Kopfzeile (sticky) und Menüleiste (fixed) auf dem iPad */
+body { margin: 0; min-height: 100%; overflow-x: clip; }
 main { overflow-x: clip; }
-body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+body { background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
 input, select { font: inherit; color: inherit; }
 h1, h2, h3 { margin: 0; letter-spacing: -.02em; }
@@ -787,3 +789,6 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
 .vs-bar { width: 60px; height: 6px; border-radius: 99px; background: rgba(255, 79, 109, .35); overflow: hidden; display: inline-block; vertical-align: middle; margin-right: 6px; }
 .vs-bar i { display: block; height: 100%; background: var(--good); }
 @media (max-width: 560px) { .vs-table th:nth-child(5), .vs-table td:nth-child(5), .vs-table th:nth-child(7), .vs-table td:nth-child(7) { display: none; } }
+.live-card.idle { border-color: var(--line); background: var(--card); padding-top: 14px; padding-bottom: 14px; }
+.live-card.idle .live-head { flex-wrap: wrap; }
+.live-dot.off { background: #6b7280; animation: none; box-shadow: none; }
