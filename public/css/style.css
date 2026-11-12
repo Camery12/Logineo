@@ -1002,3 +1002,7 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 /* Echtes 3D-Brett (WebGL) hat Vorrang vor der CSS-Schräglage des Shop-3D-Bretts */
 .board-col:has(.board-frame.frame3d) { perspective: none; }
 .board-frame.b3d.frame3d { rotate: none; margin: 0; transform-style: flat; }
+/* 3D-Brett im Finisher-Look: dunkle Bühne mit runden Ecken */
+.board.mode3d > .webgl3d { border-radius: 18px; box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .9), 0 0 0 1px rgba(124, 92, 255, .25); }
+.board-frame.frame3d { background: none; box-shadow: none; }
+.board-frame.frame3d::after { content: ""; position: absolute; inset: 0; border-radius: 18px; pointer-events: none; z-index: 7; background: radial-gradient(ellipse at 50% 55%, transparent 55%, rgba(0, 0, 0, .55) 100%); }

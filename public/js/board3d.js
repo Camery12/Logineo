@@ -2,12 +2,16 @@
 // Die Spiellogik bleibt im normalen Board – dieses Modul zeichnet nur und erkennt per Strahl, welches Feld angetippt wurde.
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { makePiece, skinMaterial } from './finisher.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { makePiece, skinMaterial, squareTexture, BOARD3D } from './finisher.js';
 import { BOARDS, splitLook } from './catalog.js';
 import { boardTexturesSync } from './textures.js';
 
-const SQ_Y = 0.06;   // Oberkante der Felder
-const SCALE = 0.72;  // Figurengröße relativ zum Feld
+const SQ_Y = 0.1;    // Oberkante der Felder (wie im Finisher)
+const SCALE = 0.84;  // Figurengröße relativ zum Feld
 const sqPos = (sq) => new THREE.Vector3(sq.charCodeAt(0) - 97 - 3.5, SQ_Y, 3.5 - (+sq[1] - 1));
 const easeOut = (t) => 1 - (1 - t) ** 3;
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
@@ -29,25 +33,43 @@ export class Board3D {
     this.canvas.className = 'webgl3d';
     board.el.appendChild(this.canvas);
     board.el.classList.add('mode3d');
-    const r = (this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true }));
-    r.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    const small = Math.min(innerWidth, innerHeight) < 820;
+    const r = (this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true }));
+    this.pixelRatio = Math.min(devicePixelRatio || 1, small ? 1.5 : 1.75);
+    r.setPixelRatio(this.pixelRatio);
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.toneMappingExposure = 0.98;
+    r.toneMappingExposure = 1.05;
     const scene = (this.scene = new THREE.Scene());
+    const bg = new THREE.Color('#07080d');
+    scene.background = bg;
+    scene.fog = new THREE.Fog(bg, 16, 40);
     const pmrem = new THREE.PMREMGenerator(r);
     this.env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
     scene.environment = this.env;
-    scene.add(new THREE.HemisphereLight('#dfe6ff', '#2a2018', 0.55));
-    const key = new THREE.DirectionalLight('#fff2e0', 2.4);
-    key.position.set(-5, 9, 5); key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024); key.shadow.radius = 4; key.shadow.bias = -0.0006;
-    Object.assign(key.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 30 });
+    // Licht wie im Finisher: kühles Umgebungslicht, warmes Hauptlicht, lila Gegenlicht, Spot von oben
+    scene.add(new THREE.HemisphereLight('#cfd8ff', '#20140a', 0.55));
+    const key = new THREE.DirectionalLight('#fff3e0', 1.25);
+    key.position.set(5, 11, 6); key.castShadow = true;
+    key.shadow.mapSize.set(small ? 1024 : 1536, small ? 1024 : 1536); key.shadow.radius = 4; key.shadow.bias = -0.0005;
+    Object.assign(key.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 30 });
     scene.add(key);
-    const rim = new THREE.DirectionalLight('#9fb8ff', 0.9); rim.position.set(-6, 5, -7); scene.add(rim);
-    this.camera = new THREE.PerspectiveCamera(26, 1, 0.1, 200);
+    const rim = new THREE.DirectionalLight('#7c5cff', 1.4); rim.position.set(-6, 5, -7); scene.add(rim);
+    const spot = new THREE.SpotLight('#ffe9c7', 9, 26, 0.62, 0.75, 1.3);
+    spot.position.set(1.5, 10, 3); spot.target.position.set(0, 0, 0);
+    spot.castShadow = !small; spot.shadow.mapSize.set(1024, 1024); spot.shadow.bias = -0.0004;
+    scene.add(spot, spot.target);
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(40, 64), new THREE.MeshStandardMaterial({ color: '#040508', roughness: 0.35, metalness: 0.4, envMapIntensity: 0.08 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.y = -0.22; floor.receiveShadow = true; scene.add(floor);
+    this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
+    // Nachbearbeitung wie im Finisher (leichtes Leuchten heller Stellen)
+    this.composer = new EffectComposer(r);
+    this.composer.addPass(new RenderPass(scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.75, 0.4, 2.8);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
     this.boardGroup = new THREE.Group(); scene.add(this.boardGroup);
     this.pieceGroup = new THREE.Group(); scene.add(this.pieceGroup);
     this.markGroup = new THREE.Group(); scene.add(this.markGroup);
@@ -75,6 +97,8 @@ export class Board3D {
     const w = this.canvas.clientWidth || this.board.el.clientWidth, h = this.canvas.clientHeight || this.board.el.clientHeight;
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
+    this.composer.setPixelRatio?.(this.pixelRatio);
+    this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camPose();
   }
@@ -83,16 +107,16 @@ export class Board3D {
   camPose() {
     const o = this.board.orientation === 'w' ? 1 : -1;
     const cam = this.camera;
-    const target = new THREE.Vector3(0, 0, 0.3 * o);
-    const dir = new THREE.Vector3(0, 1.62, 1 * o).normalize();
+    const target = new THREE.Vector3(0, 0, 0.4 * o);
+    const dir = new THREE.Vector3(0, 1.42, 1 * o).normalize();
     const pts = [];
-    for (const x of [-4.6, 4.6]) for (const z of [-4.6, 4.6]) for (const y of [-0.25, 0.85]) pts.push(new THREE.Vector3(x, y, z));
+    for (const x of [-4.55, 4.55]) for (const z of [-4.55, 4.55]) for (const y of [-0.2, 1.05]) pts.push(new THREE.Vector3(x, y, z));
     let lo = 4, hi = 60;
     for (let i = 0; i < 24; i++) {
       const mid = (lo + hi) / 2;
       cam.position.copy(target).addScaledVector(dir, mid); cam.lookAt(target);
       cam.updateMatrixWorld(); cam.updateProjectionMatrix();
-      const fits = pts.every((p) => { const v = p.clone().project(cam); return Math.abs(v.x) <= 0.97 && Math.abs(v.y) <= 0.95; });
+      const fits = pts.every((p) => { const v = p.clone().project(cam); return Math.abs(v.x) <= 0.99 && Math.abs(v.y) <= 0.97; });
       if (fits) hi = mid; else lo = mid;
     }
     cam.position.copy(target).addScaledVector(dir, hi); cam.lookAt(target);
@@ -105,12 +129,20 @@ export class Board3D {
     if (this.themeId === t.id && this.boardGroup.children.length) return;
     this.themeId = t.id;
     for (const c of [...this.boardGroup.children]) { this.boardGroup.remove(c); c.geometry?.dispose(); }
-    const physical = (extra) => new THREE.MeshPhysicalMaterial({ roughness: 0.42, metalness: 0.02, clearcoat: 0.5, clearcoatRoughness: 0.2, envMapIntensity: 0.35, ...extra });
+    const [lc, dc] = BOARD3D[t.id] || [t.light, t.dark];
+    const aniso = this.renderer.capabilities.getMaxAnisotropy();
+    const physical = (extra) => new THREE.MeshPhysicalMaterial({ roughness: 0.4, metalness: 0.02, clearcoat: 0.55, clearcoatRoughness: 0.18, envMapIntensity: 0.35, ...extra });
     const tex = boardTexturesSync(t.id);
     const base = tex ? { light: new THREE.CanvasTexture(tex.light), dark: new THREE.CanvasTexture(tex.dark) } : null;
-    if (base) for (const x of Object.values(base)) { x.colorSpace = THREE.SRGBColorSpace; x.anisotropy = this.renderer.capabilities.getMaxAnisotropy(); }
+    if (base) for (const x of Object.values(base)) { x.colorSpace = THREE.SRGBColorSpace; x.anisotropy = aniso; }
+    const plainMat = (col, seed) => {
+      const map = squareTexture('plain', new THREE.Color().setStyle(col).getStyle(), seed); map.anisotropy = aniso;
+      const m = physical({ map });
+      if (t.id === 'neon') m.emissive = new THREE.Color(seed > 3 ? '#14104a' : '#0a0830');
+      return m;
+    };
+    const lightMats = base ? null : [1, 2, 3].map((i) => plainMat(lc, i)), darkMats = base ? null : [4, 5, 6].map((i) => plainMat(dc, i));
     const sqGeo = new THREE.BoxGeometry(1, 0.2, 1);
-    const plain = { light: physical({ color: t.light.startsWith('rgba') ? '#d8d0f0' : t.light }), dark: physical({ color: t.dark.startsWith('rgba') ? '#3a2a6a' : t.dark }) };
     for (let f = 0; f < 8; f++) for (let rk = 0; rk < 8; rk++) {
       const isLight = (f + rk) % 2 === 1;
       let mat;
@@ -118,25 +150,27 @@ export class Board3D {
         const tx = (isLight ? base.light : base.dark).clone();
         tx.repeat.set(1 / 8, 1 / 8); tx.offset.set(f / 8, rk / 8); tx.needsUpdate = true;
         mat = physical({ map: tx });
-      } else mat = plain[isLight ? 'light' : 'dark'];
+      } else mat = (isLight ? lightMats : darkMats)[(f * 7 + rk * 3) % 3];
       const m = new THREE.Mesh(sqGeo, mat);
-      m.position.set(f - 3.5, SQ_Y - 0.1, 3.5 - rk); m.receiveShadow = true;
+      m.position.set(f - 3.5, 0, 3.5 - rk); m.receiveShadow = true;
       this.boardGroup.add(m);
     }
-    // Rahmen mit dünner Goldeinlage
+    if (t.frost && tex?.frost) {
+      const ft = new THREE.CanvasTexture(tex.frost); ft.colorSpace = THREE.SRGBColorSpace;
+      const frost = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ map: ft, transparent: true, opacity: 0.35, depthWrite: false }));
+      frost.rotation.x = -Math.PI / 2; frost.position.y = 0.102; this.boardGroup.add(frost);
+    }
+    // dicker Rahmen mit Goldeinlage – wie im Finisher
     const frameMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color().setStyle(t.frame), roughness: 0.35, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.15 });
-    const goldMat = new THREE.MeshStandardMaterial({ color: '#d4af37', metalness: 0.9, roughness: 0.3 });
-    const W = 0.55;
-    for (const [x, z, w, d] of [[0, 4 + W / 2, 8 + 2 * W, W], [0, -4 - W / 2, 8 + 2 * W, W], [4 + W / 2, 0, W, 8], [-4 - W / 2, 0, W, 8]]) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.3, d), frameMat);
-      m.position.set(x, SQ_Y - 0.12, z); m.castShadow = true; m.receiveShadow = true; this.boardGroup.add(m);
+    for (const [w, d, x, z] of [[9.1, 0.55, 0, -4.275], [9.1, 0.55, 0, 4.275], [0.55, 8, 4.275, 0], [0.55, 8, -4.275, 0]]) {
+      const fp = new THREE.Mesh(new THREE.BoxGeometry(w, 0.32, d), frameMat);
+      fp.position.set(x, -0.06, z); fp.receiveShadow = true; fp.castShadow = true; this.boardGroup.add(fp);
     }
-    for (const [x, z, w, d] of [[0, 4.04, 8.12, 0.04], [0, -4.04, 8.12, 0.04], [4.04, 0, 0.04, 8.12], [-4.04, 0, 0.04, 8.12]]) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), goldMat); m.position.set(x, SQ_Y + 0.035, z); this.boardGroup.add(m);
+    const goldMat = new THREE.MeshStandardMaterial({ color: '#d4a84a', metalness: 1, roughness: 0.28, envMapIntensity: 1.2 });
+    for (const [w, d, x, z] of [[8.24, 0.06, 0, 4.12], [8.24, 0.06, 0, -4.12], [0.06, 8.24, 4.12, 0], [0.06, 8.24, -4.12, 0]]) {
+      const inlay = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), goldMat);
+      inlay.position.set(x, 0.105, z); this.boardGroup.add(inlay);
     }
-    // weicher Schatten unter dem Brett
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.ShadowMaterial({ opacity: 0.35 }));
-    shadow.rotation.x = -Math.PI / 2; shadow.position.y = -0.3; shadow.receiveShadow = true; this.boardGroup.add(shadow);
     this.invalidate();
   }
 
@@ -297,7 +331,7 @@ export class Board3D {
       a.step(k, dt);
       if (k >= 1) { this.anims.splice(this.anims.indexOf(a), 1); a.done?.(); }
     }
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
     if (this.anims.length) this.invalidate();
   }
 

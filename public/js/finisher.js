@@ -2248,4 +2248,4 @@ export function renderPieceSprites({ size = 200 } = {}) {
   return out;
 }
 
-export { makePiece, skinMaterial }; // auch fürs spielbare 3D-Brett
+export { makePiece, skinMaterial, squareTexture, BOARD3D }; // auch fürs spielbare 3D-Brett
