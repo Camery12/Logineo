@@ -2,13 +2,13 @@ import { Chess } from '../vendor/chess.js';
 import { createSocket } from './net.js';
 import { Board, miniBoard, applyBoardTheme } from './board.js';
 import { pieceURL } from './pieces.js';
-import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice, PROFILE_OPTIONS, MUSIC_MAX_BYTES, eloText } from './catalog.js';
+import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice, PROFILE_OPTIONS, MUSIC_MAX_BYTES, eloText, SHAPES, pieceLook } from './catalog.js';
 import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
 import { profileCardHTML, wireProfileMusic, stopProfileMusic, fmtPlaytime } from './profilecard.js';
 import { burstAt, shakeBoard, checkFlash, confetti, coinRain, shatterPiece, preloadPieces, tableFlip, resetThrown } from './fx.js';
 import { FourBoard } from './fourboard.js';
-import { COLOR_NAMES, COLOR_HEX } from './four.js';
+import { COLOR_NAMES, COLOR_HEX, TEAM_NAMES } from './four.js';
 import { pieceURL4 } from './pieces.js';
 
 // ================================================================ Helfer
@@ -41,6 +41,9 @@ const avatar = (a, size = 40) => {
   if (a.type === 'image') return `<span class="avatar" style="--s:${size}px;background-image:url('${a.value}')"></span>`;
   return `<span class="avatar" style="--s:${size}px;--c:${a.color}">${esc(a.value)}</span>`;
 };
+// Eigenes Figuren-Aussehen (Skin + Form) und die Skins für „alle Figuren in meinem Look“
+const myLook = () => pieceLook(state.profile?.equipped);
+const mySkins = () => ({ w: myLook(), b: myLook() });
 const coinHTML = (n) => `<span class="price"><i class="coin"></i>${fmtNum(n)}</span>`;
 
 function toast(text, type = '') {
@@ -63,11 +66,13 @@ const REASONS = {
   checkmate: 'durch Schachmatt', resign: 'durch Aufgabe', timeout: 'auf Zeit', abandon: 'automatisch aufgegeben (3 Min. ohne Verbindung)',
   stalemate: 'durch Patt', insufficient: 'ungenügendes Material', repetition: 'dreifache Stellungswiederholung',
   fifty: '50-Züge-Regel', agreement: 'Remis vereinbart', draw: 'Remis', 'four-win': '4er-Schach · 1. Platz', 'four-place': '4er-Schach',
+  'team-win': '2 vs 2 · Team-Sieg', 'team-loss': '2 vs 2',
 };
+const OUT_REASONS = { checkmate: 'matt', stalemate: 'patt', resign: 'aufgegeben', timeout: 'Zeit abgelaufen', abandon: 'Verbindung weg', points: 'weniger Material' };
 const DECISIONS = { gleich: 'Beide hatten dasselbe Brett', einig: 'Ihr wart euch einig', zufall: 'Per Zufall entschieden', 'einzige Stimme': 'Nur eine Stimme abgegeben' };
 
 // ================================================================ Zustand & Verbindung
-const state = { profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'bundle', botColor: 'random', roomTime: 600000, training: localStorage.getItem('training') === '1' };
+const state = { randomTime: +(localStorage.getItem('randomTime') || 600000), challengeTime: +(localStorage.getItem('challengeTime') || 600000), profile: null, stats: { online: 0, playing: 0, queue: 0 }, view: 'play', searching: false, searchStart: 0, room: null, game: null, bot: null, shopTab: 'bundle', botColor: 'random', roomTime: 600000, training: localStorage.getItem('training') === '1' };
 const socket = window.io ? window.io({ transports: ['websocket', 'polling'] }) : createSocket();
 const emit = (ev, data) => new Promise((res) => socket.emit(ev, data, (r) => res(r || {})));
 
@@ -115,7 +120,7 @@ function warmFinisherLater() {
       const tryWarm = () => {
         if (isBusy() || document.hidden) return setTimeout(tryWarm, 5000);
         const p = state.profile;
-        m.warmupFinisher({ boardTheme: p?.equipped.board, skins: { w: p?.equipped.pieces, b: p?.equipped.pieces } });
+        m.warmupFinisher({ boardTheme: p?.equipped.board, skins: mySkins() });
       };
       tryWarm();
     } catch { /* egal – lädt dann eben beim ersten Finisher */ }
@@ -382,28 +387,29 @@ async function adminMatches(box) {
     if (!r.list.length && !before) { list.innerHTML = '<p class="muted">Keine Partien gefunden.</p>'; return; }
     list.insertAdjacentHTML('beforeend', r.list.map(matchRow).join(''));
     if (r.list.length >= 40) { list.insertAdjacentHTML('beforeend', '<button class="btn block am-more">Ältere laden</button>'); list.querySelector('.am-more').onclick = () => load(r.list.at(-1).at); }
-    $$('.adm-match:not([data-wired])', list).forEach((b) => { b.dataset.wired = 1; b.onclick = () => openReplay(b.dataset.mid, () => adminMatches(box)); });
+    $$('.adm-match:not([data-wired])', list).forEach((b) => { b.dataset.wired = 1; b.onclick = () => openReplay(b.dataset.mid, { admin: true, onChange: () => adminMatches(box) }); });
   };
   load();
 }
 
-// Replay: Partie Zug für Zug nachspielen
-async function openReplay(id, onChange) {
-  const r = await emit('admin:match', { id });
+// Replay: Partie Zug für Zug nachspielen (eigene Partien für alle, alle Partien für Admins)
+async function openReplay(id, { admin = false, onChange = null, onClose = null } = {}) {
+  const r = await emit(admin ? 'admin:match' : 'replay:get', { id });
   if (r.error) return toast(esc(r.error), 'warn');
   const m = r.match;
-  const ov = openOverlay('<div class="replay"></div>', { wide: true, onClose: () => clearInterval(auto) });
+  const meId = state.profile?.id;
+  const ov = openOverlay('<div class="replay"></div>', { wide: true, onClose: () => { clearInterval(auto); onClose?.(); } });
   ov.el.classList.add('replay-modal');
   const root = $('.replay', ov.el);
   let auto = 0, i = 0, frames = [], fourBoardR = null;
   // Stellungen vorab berechnen
   if (m.type === 'four') {
     const F = await import('./four.js');
-    const st = F.newState();
+    const st = F.newState({ teams: !!m.teams });
     frames.push({ state: JSON.parse(JSON.stringify(st)), label: 'Start' });
     for (const e of m.log || []) {
       if (e.t === 'm') { F.play(st, e.c, e.from, e.to); st.last = { from: e.from, to: e.to, color: e.c }; frames.push({ state: JSON.parse(JSON.stringify(st)), label: `${COLOR_NAMES[e.c]}: ${F.sqName(e.from)}–${F.sqName(e.to)}` }); }
-      else { const wasTurn = st.turn === e.c; F.eliminate(st, e.c, e.reason); if (wasTurn) st.turn = F.nextColor(st, e.c); F.settle(st); frames.push({ state: JSON.parse(JSON.stringify(st)), label: `☠️ ${COLOR_NAMES[e.c]} raus (${e.reason})` }); }
+      else { const wasTurn = st.turn === e.c; F.eliminate(st, e.c, e.reason); if (wasTurn) st.turn = F.nextColor(st, e.c); F.settle(st); frames.push({ state: JSON.parse(JSON.stringify(st)), label: `☠️ ${COLOR_NAMES[e.c]} raus (${OUT_REASONS[e.reason] || e.reason})` }); }
     }
   } else {
     const c = m.startFen ? new Chess(m.startFen) : new Chess();
@@ -416,12 +422,13 @@ async function openReplay(id, onChange) {
       frames.push({ fen: c.fen(), label: res.san, last: { from: res.from, to: res.to } });
     }
   }
-  const title = m.type === 'online' ? `${esc(m.players.w.name)} (Weiß) vs ${esc(m.players.b.name)} (Schwarz)` : m.type === 'bot' ? `${esc(m.players.user.name)} vs ${esc(m.players.bot.name)}` : '4er-Schach';
+  const teamName = (t) => (m.players || []).filter((p) => p.color % 2 === t).map((p) => esc(p.name)).join(' & ');
+  const title = m.type === 'online' ? `${esc(m.players.w.name)} (Weiß) vs ${esc(m.players.b.name)} (Schwarz)` : m.type === 'bot' ? `${esc(m.players.user.name)} vs ${esc(m.players.bot.name)}` : m.teams ? `2 vs 2: ${teamName(0)} vs ${teamName(1)}` : '4er-Schach';
   const pInfo = m.type === 'online'
     ? ['w', 'b'].map((k) => { const p = m.players[k]; return `<div class="rp-player">${k === 'w' ? '♔' : '♚'} <b>${esc(p.name)}</b> <span class="muted small">${p.ratingBefore} Elo</span> <span class="${p.d > 0 ? 'res-win' : p.d < 0 ? 'res-loss' : 'muted'}">${p.d > 0 ? '+' : ''}${p.d} Elo</span> · ${p.coins} 🪙</div>`; }).join('')
-    : m.type === 'four' ? (m.players || []).map((p) => `<div class="rp-player"><i class="fdot" style="--fc:${COLOR_HEX[p.color]}"></i> ${p.place}. <b>${esc(p.name)}</b>${p.bot ? ' 🤖' : ''} <span class="muted small">${p.reason || 'Sieger'}${p.coins ? ` · ${p.coins} 🪙` : ''}</span></div>`).join('')
+    : m.type === 'four' ? (m.players || []).map((p) => `<div class="rp-player"><i class="fdot" style="--fc:${COLOR_HEX[p.color]}"></i> ${m.teams ? (p.place === 1 ? '🏆' : '✖️') : `${p.place}.`} <b>${esc(p.name)}</b>${p.bot ? ' 🤖' : ''}${p.uid && p.uid === meId ? ' <span class="tag">Du</span>' : ''} <span class="muted small">${m.teams ? `Team ${TEAM_NAMES[p.color % 2]}` : ''}${p.reason ? ` · ${OUT_REASONS[p.reason] || p.reason}` : m.teams ? '' : 'Sieger'}${p.coins ? ` · ${p.coins} 🪙` : ''}</span></div>`).join('')
       : `<div class="rp-player"><b>${esc(m.players.user.name)}</b> spielte ${m.players.user.color === 'w' ? 'Weiß' : 'Schwarz'} · ${m.players.user.coins} 🪙</div>`;
-  root.innerHTML = `<div class="rp-head"><div><h3>${MATCH_ICON[m.type]} ${title}</h3><p class="muted small">${new Date(m.at).toLocaleString('de-DE')} · ${REASONS[m.reason] || ''}${m.unrated ? ` · ⚖️ nicht gewertet: ${esc(m.unrated)}` : ''}${m.variant === 'queens' ? ' · 👑 Queen-Modus' : ''}${m.annulled ? ` · <b class="res-loss">annulliert von ${esc(m.annulled.by)}</b>` : ''}</p></div><button class="btn sm" data-x>✕</button></div>
+  root.innerHTML = `<div class="rp-head"><div><h3>${m.teams ? '🤝' : MATCH_ICON[m.type]} ${title}</h3><p class="muted small">${new Date(m.at).toLocaleString('de-DE')} · ${REASONS[m.reason] || ''}${m.unrated ? ` · ⚖️ nicht gewertet: ${esc(m.unrated)}` : ''}${m.variant === 'queens' ? ' · 👑 Queen-Modus' : ''}${m.annulled ? ` · <b class="res-loss">annulliert von ${esc(m.annulled.by)}</b>` : ''}</p></div><button class="btn sm" data-x>✕</button></div>
     <div class="rp-body">
       <div class="rp-board" id="rp-board"></div>
       <div class="rp-side">${pInfo}
@@ -430,18 +437,28 @@ async function openReplay(id, onChange) {
     </div>
     <div class="rp-ctrl"><button class="btn" data-go="first">⏮</button><button class="btn" data-go="prev">◀</button><button class="btn primary" data-go="play">▶ Abspielen</button><button class="btn" data-go="next">▶</button><button class="btn" data-go="last">⏭</button>
       <input type="range" id="rp-range" min="0" max="${frames.length - 1}" value="0"><span class="muted small" id="rp-pos"></span></div>
-    <div class="modal-actions">${m.type !== 'four' ? '<button class="btn" id="rp-pgn">📋 Züge kopieren</button>' : ''}${m.annulled ? '' : '<button class="btn danger" id="rp-annul">⚖️ Annullieren (Elo & Münzen zurück)</button>'}</div>`;
+    <div class="modal-actions">${m.type !== 'four' ? '<button class="btn" id="rp-pgn">📋 Züge kopieren</button>' : ''}${admin && !m.annulled ? '<button class="btn danger" id="rp-annul">⚖️ Annullieren (Elo & Münzen zurück)</button>' : ''}</div>`;
   $('[data-x]', root).onclick = ov.close;
   const boardBox = $('#rp-board');
-  if (m.type === 'four') { fourBoardR = new FourBoard(boardBox, {}); const b = findItem('board', state.profile?.equipped.board) || BOARDS[0]; fourBoardR.setTheme(b.light, b.dark); }
+  // Eigene Figuren im Replay in deinem Look
+  const myColor = m.type === 'online' ? (m.players.w?.id === meId ? 'w' : m.players.b?.id === meId ? 'b' : null) : m.type === 'bot' ? m.players.user.color : null;
+  const rpSkins = { w: 'klassisch', b: 'klassisch' };
+  if (myColor) rpSkins[myColor] = myLook();
+  if (m.type === 'four') {
+    fourBoardR = new FourBoard(boardBox, {}); const b = findItem('board', state.profile?.equipped.board) || BOARDS[0]; fourBoardR.setTheme(b.light, b.dark);
+    const mine = (m.players || []).find((p) => p.uid && p.uid === meId);
+    if (mine) fourBoardR.setLooks(fourLooks({ you: mine.color, teams: !!m.teams }));
+  }
   const show = (k) => {
     i = Math.max(0, Math.min(frames.length - 1, k));
     const f = frames[i];
     if (m.type === 'four') fourBoardR.set({ ...f.state, status: 'over' }, 0, null);
     else {
       boardBox.innerHTML = '';
-      const mb = miniBoard(m.board || 'klassisch', { w: 'klassisch', b: 'klassisch' }, f.fen);
+      const mb = miniBoard(m.board === 'brett3d' ? 'klassisch' : (m.board || state.profile?.equipped.board || 'klassisch'), rpSkins, f.fen);
+      if (myColor === 'b') mb.classList.add('rp-flip');
       if (f.last) for (const sq of [f.last.from, f.last.to]) { const idx = (8 - +sq[1]) * 8 + (sq.charCodeAt(0) - 97); mb.children[idx]?.classList.add('rp-last'); }
+      if (myColor === 'b') for (const c of mb.children) c.classList.add('rp-unflip');
       boardBox.appendChild(mb);
     }
     $$('#rp-moves button').forEach((b) => b.classList.toggle('on', +b.dataset.k === i));
@@ -581,7 +598,7 @@ function animateNumber(el, from, to) {
 
 // ================================================================ Navigation
 function go(view) {
-  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin'].includes(view)) view = 'play';
+  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin', 'replays'].includes(view)) view = 'play';
   if (view === 'admin' && !state.profile?.admin) view = 'play';
   if (view === 'game' && !state.game && !state.bot) view = 'play';
   if (view === 'four' && !state.four) view = 'play';
@@ -600,6 +617,7 @@ function go(view) {
   if (view === 'friends') renderFriends();
   if (view === 'admin') renderAdmin(state.adminTab || 'overview');
   if (view === 'leaderboard') renderLeaderboard();
+  if (view === 'replays') renderReplays();
   if (view === 'play') renderPlay();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -616,13 +634,24 @@ function renderAll() { renderPlay(); renderBots(); }
 
 // ================================================================ Spielen (Lobby)
 const TIMES = [[60000, '1 Min'], [180000, '3 Min'], [300000, '5 Min'], [600000, '10 Min'], [900000, '15 Min'], [0, '∞']];
+const RANDOM_TIMES = TIMES.filter(([t]) => t > 0);
+const timeLabel = (t) => (t ? (TIMES.find(([x]) => x === t)?.[1] || `${Math.round(t / 60000)} Min`) : 'ohne Uhr');
+const timeSeg = (id, list, cur) => `<div class="seg" id="${id}">${list.map(([t, l]) => `<button data-t="${t}" class="${t === cur ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+// Kleines Fenster: Bedenkzeit auswählen, dann onPick(zeit)
+function pickTime(title, onPick, { list = TIMES, cur = state.challengeTime } = {}) {
+  const ov = openOverlay(`<h2>${title}</h2><p class="muted">Wie viel Bedenkzeit soll jeder haben?</p>
+    <div class="time-pick">${list.map(([t, l]) => `<button class="btn ${t === cur ? 'primary' : ''}" data-t="${t}">⏱️ ${l}</button>`).join('')}</div>
+    <div class="modal-actions"><button class="btn" data-x>Abbrechen</button></div>`);
+  $('[data-x]', ov.el).onclick = ov.close;
+  $$('[data-t]', ov.el).forEach((b) => b.onclick = () => { ov.close(); state.challengeTime = +b.dataset.t; localStorage.setItem('challengeTime', b.dataset.t); onPick(+b.dataset.t); });
+}
 const codeDigits = (code, small = false) => `<div class="code-display ${small ? 'small' : ''}">${[...code].map((d, i) => `<span style="animation-delay:${i * 50}ms">${d}</span>`).join('')}</div>`;
 
 // Hero-Brett: zeigt deine ausgerüsteten Skins und neigt sich zur Maus, wenn sie in der Nähe ist
 function renderHeroBoard() {
   const p = state.profile, tilt = $('.hero-tilt');
   if (!p || !tilt) return;
-  tilt.replaceChildren(miniBoard(p.equipped.board, { w: p.equipped.pieces, b: p.equipped.pieces }, 'r1bq1rk1/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQ1RK1'));
+  tilt.replaceChildren(miniBoard(p.equipped.board, mySkins(), 'r1bq1rk1/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQ1RK1'));
 }
 let heroRaf = 0;
 document.addEventListener('pointermove', (e) => {
@@ -666,6 +695,7 @@ function renderPlay() {
         <h3>Code eingeben</h3>
         <p>Gib einen 6-stelligen Einladungscode oder den 8-stelligen Spielercode eines Freundes ein.</p>
         <input class="code-input" id="join-input" inputmode="numeric" maxlength="8" placeholder="••••••" autocomplete="off" />
+        <div class="join-time" id="join-time" hidden><span class="muted small">Bedenkzeit für die Herausforderung</span>${timeSeg('chal-seg', TIMES, state.challengeTime)}</div>
         <button class="btn primary block" id="join-btn">Beitreten</button>
       </div>
       <div class="card play-card">
@@ -679,7 +709,8 @@ function renderPlay() {
   renderHeroBoard();
   renderRandomCard(); renderInviteCard(); renderFourCard(); refreshLive();
   const inp = $('#join-input');
-  inp.oninput = () => { inp.value = inp.value.replace(/\D/g, ''); };
+  inp.oninput = () => { inp.value = inp.value.replace(/\D/g, ''); $('#join-time').hidden = inp.value.length < 7; };
+  $$('#chal-seg button').forEach((b) => b.onclick = () => { state.challengeTime = +b.dataset.t; localStorage.setItem('challengeTime', b.dataset.t); $$('#chal-seg button').forEach((x) => x.classList.toggle('on', x === b)); });
   inp.onkeydown = (e) => { if (e.key === 'Enter') joinCode(); };
   $('#join-btn').onclick = joinCode;
   $('#copy-mycode').onclick = () => copy(p.code, 'Spielercode kopiert!');
@@ -694,11 +725,11 @@ async function joinCode() {
   const code = $('#join-input').value.trim();
   if (code.length !== 6 && code.length !== 8) return toast('Der Code muss 6 oder 8 Ziffern haben.', 'warn');
   const btn = $('#join-btn'); btn.disabled = true;
-  const r = await emit('code:join', { code });
+  const r = await emit('code:join', { code, timeMs: state.challengeTime });
   btn.disabled = false;
   if (r.error) return toast(esc(r.error), 'warn');
   if (r.challenged) toast(`⚔️ Herausforderung an ${esc(r.challenged)} gesendet…`, 'good');
-  if (r.four) toast('👥 Du bist in der 4er-Lobby!', 'good');
+  if (r.four) toast(r.teams ? '🤝 Du bist in der 2-vs-2-Lobby!' : '👥 Du bist in der 4er-Lobby!', 'good');
 }
 
 let searchTimer = null;
@@ -712,17 +743,20 @@ function renderRandomCard() {
     const tick = () => {
       const s = Math.floor((Date.now() - state.searchStart) / 1000);
       const t = $('#search-time'); if (t) t.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-      const q = $('#search-q'); if (q) q.textContent = `${Math.max(0, state.stats.queue - 1)} weitere in der Warteschlange`;
+      const n = state.stats.queueBy?.[state.randomTime] ?? state.stats.queue;
+      const q = $('#search-q'); if (q) q.textContent = `${timeLabel(state.randomTime)} · ${Math.max(0, n - 1)} weitere suchen gerade`;
     };
     tick(); searchTimer = setInterval(tick, 500);
     $('#search-cancel').onclick = () => { socket.emit('queue:leave'); state.searching = false; renderRandomCard(); };
   } else {
     el.innerHTML = `<div class="ic">🎲</div><h3>Zufälliges Match</h3>
-      <p>Wir finden dir einen Gegner mit ähnlichem Elo. 10 Minuten pro Spieler, mit Elo-Wertung.</p>
+      <p>Wir finden dir einen Gegner mit ähnlichem Elo und derselben Bedenkzeit – mit Elo-Wertung.</p>
+      ${timeSeg('rand-seg', RANDOM_TIMES, state.randomTime)}
       <div class="muted" style="font-size:13px">Sieg <b style="color:var(--good)">+${REWARDS.win}</b> · Remis +${REWARDS.draw} · Trostgeld +${REWARDS.loss} <i class="coin" style="width:14px;height:14px;vertical-align:-2px"></i></div>
       <button class="btn primary block" id="search-btn">⚡ Gegner suchen</button>`;
+    $$('#rand-seg button').forEach((b) => b.onclick = () => { state.randomTime = +b.dataset.t; localStorage.setItem('randomTime', b.dataset.t); renderRandomCard(); });
     $('#search-btn').onclick = async () => {
-      const r = await emit('queue:join');
+      const r = await emit('queue:join', { timeMs: state.randomTime });
       if (r.error) return toast(esc(r.error), 'warn');
       if (!r.matched) { state.searching = true; state.searchStart = Date.now(); renderRandomCard(); }
     };
@@ -774,10 +808,10 @@ function showBigCode(code, queens) {
 }
 
 // Eingehende Herausforderung
-socket.on('challenge:incoming', ({ id, from }) => {
+socket.on('challenge:incoming', ({ id, from, timeMs = 600000 }) => {
   sound.notify();
   const ov = openOverlay(`<div class="challenge">${avatar(from.avatar, 84)}<h2>${esc(from.name)}</h2>
-    <p class="muted">fordert dich zu einer Partie heraus! (${from.rating} Elo · 10 Min)</p>
+    <p class="muted">fordert dich zu einer Partie heraus! (${from.rating} Elo · ⏱️ ${timeLabel(timeMs)})</p>
     <div class="modal-actions"><button class="btn danger" data-a="0">Ablehnen</button><button class="btn good" data-a="1">⚔️ Annehmen</button></div></div>`, { closable: false });
   const answer = (accept) => { socket.emit('challenge:respond', { id, accept }); ov.close(); clearTimeout(timer); };
   $$('[data-a]', ov.el).forEach((b) => b.onclick = () => answer(b.dataset.a === '1'));
@@ -812,12 +846,14 @@ const fmtTime = (t) => { const d = new Date(t), now = new Date(); const hm = d.t
 async function renderFriends() {
   const root = $('#view-friends');
   if (!root.querySelector('.friends-layout')) {
-    root.innerHTML = `<div class="section-title"><div><h2>Freunde</h2><p>Suche Spieler, schick Freundschaftsanfragen und schreib mit deinen Freunden.</p></div></div>
-      <div class="friends-layout ${state.chatWith ? 'chat-open' : ''}">
+    root.innerHTML = `<div class="section-title"><div><h2>Freunde</h2><p>Suche Spieler, schick Freundschaftsanfragen, schreib mit deinen Freunden – oder mach eine Gruppe.</p></div></div>
+      <div class="friends-layout ${state.chatWith || state.chatGroup ? 'chat-open' : ''}">
         <div class="card fr-side">
           <div class="fr-search"><input id="fr-q" placeholder="🔎 Spieler suchen (Name)…" autocomplete="off" maxlength="20"></div>
           <div id="fr-results"></div>
           <div id="fr-requests"></div>
+          <div class="fr-h-row"><h4 class="fr-h">Gruppen</h4><button class="btn sm" id="grp-new">➕ Gruppe erstellen</button></div>
+          <div id="grp-list"></div>
           <h4 class="fr-h">Deine Freunde</h4>
           <div id="fr-list"><p class="muted small">Lade…</p></div>
         </div>
@@ -825,10 +861,174 @@ async function renderFriends() {
       </div>`;
     let tm = 0;
     $('#fr-q').oninput = () => { clearTimeout(tm); tm = setTimeout(searchPlayers, 250); };
+    $('#grp-new').onclick = () => groupDialog();
   }
-  await loadFriends();
-  if (state.chatWith) openChat(state.chatWith, { keep: true });
+  await Promise.all([loadFriends(), loadGroups()]);
+  if (state.chatGroup) openGroup(state.chatGroup, { keep: true });
+  else if (state.chatWith) openChat(state.chatWith, { keep: true });
 }
+
+// ---------------------------------------------------------------- Gruppen
+async function loadGroups() {
+  const r = await emit('groups:list');
+  const box = $('#grp-list'); if (!box || !r.groups) return;
+  state.groups = r.groups;
+  box.innerHTML = r.groups.length ? r.groups.map((g) => `<button class="fr-row fr-group ${state.chatGroup === g.id ? 'active' : ''}" data-group="${esc(g.id)}">
+      <span class="grp-av">👥<i>${g.members.length}</i></span>
+      <div class="fr-name"><b>${esc(g.name)}</b><span>${g.last ? `${g.last.name ? esc(g.last.name) + ': ' : ''}${esc(g.last.text.slice(0, 40))}` : `${g.members.length} Mitglieder`}</span></div>
+      ${g.unread ? `<span class="nav-badge inline">${g.unread}</span>` : ''}</button>`).join('')
+    : '<p class="muted small">Noch keine Gruppe. Erstelle eine und lade mehrere Freunde ein – zum Schreiben und für 2 vs 2!</p>';
+  $$('[data-group]', box).forEach((b) => b.onclick = () => openGroup(b.dataset.group));
+}
+// Gruppe erstellen oder Mitglieder hinzufügen
+async function groupDialog(group = null) {
+  if (!state.friendsData) await loadFriends();
+  const inGroup = new Set(group ? group.members.map((m) => m.id) : []);
+  const friends = (state.friendsData?.friends || []).filter((f) => !inGroup.has(f.id));
+  if (!friends.length) return toast(group ? 'Alle deine Freunde sind schon in der Gruppe.' : 'Du brauchst zuerst Freunde, um eine Gruppe zu erstellen.', 'warn');
+  const ov = openOverlay(`<h2>${group ? `➕ Zu „${esc(group.name)}“ hinzufügen` : '👥 Neue Gruppe'}</h2>
+    <form id="grp-form">${group ? '' : '<label class="field"><span>Name der Gruppe</span><input name="name" maxlength="24" placeholder="z. B. Schach-Crew" required></label>'}
+      <div class="muted small" style="margin:10px 0 6px">Freunde auswählen (bis zu 11):</div>
+      <div class="grp-pick">${friends.map((f) => `<label class="grp-opt"><input type="checkbox" value="${esc(f.id)}"><span class="fr-av">${avatar(f.avatar, 30)}${f.online ? '<i class="dot"></i>' : ''}</span><b>${esc(f.name)}</b><span class="muted small">${f.rating} Elo</span></label>`).join('')}</div>
+      <div class="form-error" id="grp-err"></div>
+      <div class="modal-actions"><button type="button" class="btn" data-x>Abbrechen</button><button class="btn primary">${group ? 'Hinzufügen' : 'Gruppe erstellen'}</button></div></form>`);
+  $('[data-x]', ov.el).onclick = ov.close;
+  const form = $('#grp-form', ov.el);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const members = $$('input[type=checkbox]:checked', form).map((c) => c.value);
+    const r = group ? await emit('group:add', { id: group.id, members }) : await emit('group:create', { name: form.name.value, members });
+    if (r.error) { $('#grp-err', ov.el).textContent = r.error; return; }
+    ov.close();
+    toast(group ? '✅ Mitglieder hinzugefügt' : `🎉 Gruppe „${esc(r.group.name)}“ erstellt`, 'good');
+    await loadGroups(); openGroup(r.group.id);
+  };
+  setTimeout(() => form.name?.focus(), 50);
+}
+async function openGroup(id, { keep = false } = {}) {
+  if (state.view !== 'friends') { state.chatGroup = id; state.chatWith = null; go('friends'); return; }
+  state.chatGroup = id; state.chatWith = null;
+  $('.friends-layout')?.classList.add('chat-open');
+  $$('.fr-friend').forEach((b) => b.classList.remove('active'));
+  $$('.fr-group').forEach((b) => b.classList.toggle('active', b.dataset.group === id));
+  const box = $('#fr-chat'); if (!box) return;
+  if (!keep || box.dataset.id !== 'g:' + id) box.innerHTML = '<div class="fr-empty"><span class="spinner"></span></div>';
+  const r = await emit('group:history', { id });
+  if (r.error) { toast(esc(r.error), 'warn'); state.chatGroup = null; box.innerHTML = ''; loadGroups(); return; }
+  setSocial(r);
+  const g = r.group;
+  state.groupMembers = Object.fromEntries(g.members.map((m) => [m.id, m]));
+  box.dataset.id = 'g:' + id;
+  const on = g.members.filter((m) => m.online).length;
+  box.innerHTML = `<div class="ch-head">
+      <button class="btn sm ch-back" title="Zurück">←</button>
+      <span class="grp-av big">👥<i>${g.members.length}</i></span>
+      <div class="fr-name"><b>${esc(g.name)}</b><span>${g.members.length} Mitglieder · ${on} online</span></div>
+      <button class="btn sm primary" id="grp-play" title="Alle zu einem Spiel einladen">🤝 Spielen</button>
+      <button class="btn sm" id="grp-add" title="Freunde hinzufügen">➕</button>
+      <button class="btn sm" id="grp-ren" title="Umbenennen">✏️</button>
+      <button class="btn sm danger" id="grp-leave" title="Gruppe verlassen">🚪</button>
+    </div>
+    <div class="grp-members">${g.members.map((m) => `<button class="grp-mem" data-prof="${esc(m.id)}" title="${esc(m.name)}">${avatar(m.avatar, 28)}${m.online ? '<i class="dot"></i>' : ''}<span>${esc(m.name)}${m.id === g.owner ? ' 👑' : ''}</span></button>`).join('')}</div>
+    <div class="ch-msgs" id="ch-msgs">${r.msgs.length ? '' : '<div class="ch-hint">Schreib der Gruppe etwas! 👋<br><span class="muted small">Mit „🤝 Spielen“ lädst du alle zu einem 2 vs 2 ein.</span></div>'}</div>
+    <form class="ch-form" id="ch-form"><input id="ch-input" maxlength="300" placeholder="Nachricht an ${esc(g.name)}…" autocomplete="off"><button class="btn primary">Senden</button></form>`;
+  for (const m of r.msgs) appendGroupMsg(m, false);
+  const msgs = $('#ch-msgs'); msgs.scrollTop = msgs.scrollHeight;
+  $$('.grp-mem', box).forEach((b) => b.onclick = () => showPlayerProfile(b.dataset.prof));
+  $('.ch-back', box).onclick = () => { state.chatGroup = null; $('.friends-layout')?.classList.remove('chat-open'); loadGroups(); };
+  $('#grp-add').onclick = () => groupDialog(g);
+  $('#grp-ren').onclick = () => {
+    const ov = openOverlay(`<h2>✏️ Gruppe umbenennen</h2><form id="ren-form"><label class="field"><span>Neuer Name</span><input name="n" maxlength="24" value="${esc(g.name)}" required></label>
+      <div class="modal-actions"><button type="button" class="btn" data-x>Abbrechen</button><button class="btn primary">Speichern</button></div></form>`);
+    $('[data-x]', ov.el).onclick = ov.close;
+    $('#ren-form', ov.el).onsubmit = async (e) => { e.preventDefault(); const rr = await emit('group:rename', { id, name: e.target.n.value }); if (rr.error) return toast(esc(rr.error), 'warn'); ov.close(); openGroup(id); loadGroups(); };
+  };
+  $('#grp-leave').onclick = () => confirmBox('Gruppe verlassen?', `Du verlässt „${esc(g.name)}“ und siehst die Nachrichten nicht mehr.`, 'Verlassen', async () => {
+    await emit('group:leave', { id }); state.chatGroup = null; box.innerHTML = ''; $('.friends-layout')?.classList.remove('chat-open'); loadGroups(); toast('Gruppe verlassen');
+  });
+  $('#grp-play').onclick = () => groupPlayDialog(g);
+  $('#ch-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const inp = $('#ch-input'), text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    const rr = await emit('group:send', { id, text });
+    if (rr.error) { inp.value = text; return toast(esc(rr.error), 'warn'); }
+    appendGroupMsg(rr.msg, true);
+  };
+  if (!matchMedia('(max-width: 900px)').matches) $('#ch-input').focus();
+  loadGroups();
+}
+function groupPlayDialog(g) {
+  let teams = true, t = state.fourTime || 300000;
+  const ov = openOverlay('<div id="gp"></div>');
+  const draw = () => {
+    $('#gp', ov.el).innerHTML = `<h2>🤝 Mit „${esc(g.name)}“ spielen</h2><p class="muted">Es wird eine Lobby erstellt und alle in der Gruppe bekommen eine Einladung mit Beitreten-Knopf. Leere Plätze werden Bots.</p>
+      <div class="seg mode-seg" id="gp-mode"><button data-m="1" class="${teams ? 'on' : ''}">🤝 2 vs 2</button><button data-m="0" class="${teams ? '' : 'on'}">👥 Jeder gegen jeden</button></div>
+      <div style="margin-top:10px">${timeSeg('gp-time', FOUR_TIMES, t)}</div>
+      <div class="modal-actions"><button class="btn" data-x>Abbrechen</button><button class="btn primary" data-go>Lobby erstellen & einladen</button></div>`;
+    $$('#gp-mode button', ov.el).forEach((b) => b.onclick = () => { teams = b.dataset.m === '1'; draw(); });
+    $$('#gp-time button', ov.el).forEach((b) => b.onclick = () => { t = +b.dataset.t; draw(); });
+    $('[data-x]', ov.el).onclick = ov.close;
+    $('[data-go]', ov.el).onclick = async () => {
+      const r = await emit('group:play', { id: g.id, teams, timeMs: t });
+      if (r.error) return toast(esc(r.error), 'warn');
+      ov.close();
+      state.fourTime = t; state.fourLobby = r.lobby;
+      if (r.msg) appendGroupMsg(r.msg, true);
+      toast(`${teams ? '🤝' : '👥'} Lobby erstellt – die Gruppe ist eingeladen!`, 'good');
+      sound.notify();
+      go('play');
+      setTimeout(() => $('#card-four')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+    };
+  };
+  draw();
+}
+function appendGroupMsg(m, scroll = true) {
+  const box = $('#ch-msgs'); if (!box) return;
+  box.querySelector('.ch-hint')?.remove();
+  if (m.sys) { box.insertAdjacentHTML('beforeend', `<div class="ch-sys">${esc(m.text)} · ${fmtTime(m.at)}</div>`); if (scroll) box.scrollTop = box.scrollHeight; return; }
+  const mine = m.from === state.profile?.id;
+  const who = state.groupMembers?.[m.from];
+  const inv = m.invite ? `<div class="ch-invite"><b>${m.invite.teams ? '🤝 2 vs 2' : '👥 4er-Schach'}</b><span>Code ${esc(m.invite.code)} · ⏱️ ${timeLabel(m.invite.timeMs)}</span>${mine ? '' : `<button class="btn sm good" data-join="${esc(m.invite.code)}">Beitreten</button>`}</div>` : '';
+  box.insertAdjacentHTML('beforeend', `<div class="ch-msg ${mine ? 'me' : ''} grp">${mine ? '' : `<em class="ch-who">${who ? avatar(who.avatar, 18) : ''}${esc(who?.name || m.name || '?')}</em>`}<span>${esc(m.text)}</span>${inv}<small>${fmtTime(m.at)}</small></div>`);
+  const jb = box.lastElementChild.querySelector('[data-join]');
+  if (jb) jb.onclick = async () => {
+    jb.disabled = true;
+    const r = await emit('code:join', { code: jb.dataset.join });
+    jb.disabled = false;
+    if (r.error) return toast(esc(r.error), 'warn');
+    toast(r.teams ? '🤝 Du bist in der 2-vs-2-Lobby!' : '👥 Du bist in der 4er-Lobby!', 'good');
+    go('play'); setTimeout(() => $('#card-four')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+  };
+  if (scroll) box.scrollTop = box.scrollHeight;
+}
+socket.on('group:msg', ({ group, msg, unread, requests }) => {
+  const visible = state.view === 'friends' && state.chatGroup === group.id && !document.hidden && $('#fr-chat')?.dataset.id === 'g:' + group.id;
+  if (visible) {
+    appendGroupMsg(msg); sound.click();
+    socket.emit('group:read', { id: group.id });
+    setSocial({ unread: Math.max(0, unread - 1), requests });
+    return;
+  }
+  setSocial({ unread, requests });
+  if (msg.sys) { if (state.view === 'friends') loadGroups(); return; }
+  sound.notify();
+  const open = () => openGroup(group.id);
+  const join = msg.invite ? [{ label: '⚔️ Beitreten', cls: 'good', onClick: async () => { const r = await emit('code:join', { code: msg.invite.code }); if (r.error) return toast(esc(r.error), 'warn'); go('play'); } }] : [];
+  notify({ icon: '👥', title: `${esc(group.name)} · ${esc(msg.name || '')}`, text: esc(msg.text.length > 90 ? msg.text.slice(0, 90) + '…' : msg.text), onClick: open, timeout: msg.invite ? 30000 : 8000, actions: [...join, { label: 'Öffnen', cls: join.length ? '' : 'primary', onClick: open }] });
+  if (state.view === 'friends') loadGroups();
+});
+socket.on('group:added', ({ group, by }) => {
+  sound.notify();
+  notify({ avatarObj: by.avatar, title: `👥 ${esc(by.name)} hat dich zu „${esc(group.name)}“ hinzugefügt`, text: 'Neue Gruppe unter „Freunde“.', actions: [{ label: 'Öffnen', cls: 'primary', onClick: () => openGroup(group.id) }] });
+  if (state.view === 'friends') loadGroups();
+});
+socket.on('group:update', ({ id }) => {
+  if (state.view !== 'friends') return;
+  loadGroups();
+  if (state.chatGroup === id) openGroup(id, { keep: true });
+});
 async function searchPlayers() {
   const q = $('#fr-q')?.value.trim() || '';
   const box = $('#fr-results'); if (!box) return;
@@ -878,8 +1078,9 @@ async function loadFriends() {
   wireFriendButtons(req); wireFriendButtons(list);
 }
 async function openChat(id, { keep = false } = {}) {
-  if (state.view !== 'friends') { state.chatWith = id; go('friends'); return; }
-  state.chatWith = id;
+  if (state.view !== 'friends') { state.chatWith = id; state.chatGroup = null; go('friends'); return; }
+  state.chatWith = id; state.chatGroup = null;
+  $$('.fr-group').forEach((b) => b.classList.remove('active'));
   $('.friends-layout')?.classList.add('chat-open');
   $$('.fr-friend').forEach((b) => b.classList.toggle('active', b.dataset.chat === id));
   const box = $('#fr-chat'); if (!box) return;
@@ -904,7 +1105,7 @@ async function openChat(id, { keep = false } = {}) {
   msgs.scrollTop = msgs.scrollHeight;
   $('.ch-back', box).onclick = () => { state.chatWith = null; $('.friends-layout')?.classList.remove('chat-open'); loadFriends(); };
   $('#ch-profile').onclick = () => showPlayerProfile(id);
-  $('#ch-challenge').onclick = async () => { const rr = await emit('friend:challenge', { id }); rr.error ? toast(esc(rr.error), 'warn') : toast(`⚔️ Herausforderung an ${esc(f.name)} gesendet…`, 'good'); };
+  $('#ch-challenge').onclick = () => pickTime(`⚔️ ${esc(f.name)} herausfordern`, async (timeMs) => { const rr = await emit('friend:challenge', { id, timeMs }); rr.error ? toast(esc(rr.error), 'warn') : toast(`⚔️ Herausforderung an ${esc(f.name)} gesendet (${timeLabel(timeMs)})…`, 'good'); });
   $('#ch-remove').onclick = () => confirmBox('Freund entfernen?', `${esc(f.name)} wird aus deiner Freundesliste entfernt. Ihr könnt euch dann nicht mehr schreiben.`, 'Entfernen', async () => {
     await emit('friend:remove', { id }); state.chatWith = null; box.innerHTML = ''; $('.friends-layout')?.classList.remove('chat-open'); loadFriends();
   });
@@ -962,7 +1163,11 @@ socket.on('friend:status', ({ id, online }) => {
   if (row) loadFriends();
   if (state.chatWith === id) { const st = $('#ch-status'); if (st) st.textContent = st.textContent.replace(/^(online|offline)/, online ? 'online' : 'offline'); }
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && state.chatWith && state.view === 'friends') socket.emit('chat:read', { id: state.chatWith }); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || state.view !== 'friends') return;
+  if (state.chatWith) socket.emit('chat:read', { id: state.chatWith });
+  if (state.chatGroup) socket.emit('group:read', { id: state.chatGroup });
+});
 
 // ================================================================ Live zuschauen
 async function refreshLive() {
@@ -1006,46 +1211,59 @@ function stopWatching() {
 socket.on('game:watchers', ({ id, n }) => { if (state.game?.id === id) { state.game.watchers = n; renderOnline(); } });
 
 // ================================================================ 4er-Schach
-const FOUR_TIMES = [[180000, '3 Min'], [300000, '5 Min'], [600000, '10 Min']];
+const FOUR_TIMES = [[60000, '1 Min'], [180000, '3 Min'], [300000, '5 Min'], [600000, '10 Min'], [900000, '15 Min']];
 const fourDot = (c) => `<i class="fdot" style="--fc:${COLOR_HEX[c]}"></i>`;
+const teamDots = (t) => fourDot(t) + fourDot(t + 2);
 function renderFourCard() {
   const el = $('#card-four'); if (!el) return;
   const l = state.fourLobby, me = state.profile?.id;
   const t = state.fourTime || 300000;
+  const mode = state.fourMode || localStorage.getItem('fourMode') || 'teams';
   if (l) {
     const host = l.host === me;
     const hidden = !!state.codeHidden;
-    el.innerHTML = `<div class="four-head"><div class="ic">👥</div><div><h3>4er-Lobby</h3><p>Teile den Code – bis zu 4 Spieler. ${host ? 'Freie Plätze füllst du mit Bots.' : 'Der Gastgeber startet das Spiel.'}</p></div></div>
+    const bots = 4 - l.players.length;
+    const seat = (p) => `<div class="seat on">${avatar(p.avatar, 34)}<b>${esc(p.name)}</b>${p.id === l.host ? '<span class="tag">Host</span>' : ''}${p.id === me ? '<span class="tag">Du</span>' : ''}</div>`;
+    const empty = '<div class="seat"><span class="seat-empty">🤖</span><span class="muted">frei – wird Bot</span></div>';
+    const seats = l.teams
+      ? `<div class="team-cols">${[0, 1].map((tm) => { const ps = l.players.filter((p) => (l.side?.[p.id] ?? 0) === tm); return `<div class="team-col"><h4>${teamDots(tm)} Team ${TEAM_NAMES[tm]}</h4>${[0, 1].map((i) => (ps[i] ? seat(ps[i]) : empty)).join('')}</div>`; }).join('<div class="team-vs">VS</div>')}</div>`
+      : `<div class="four-seats">${[0, 1, 2, 3].map((i) => (l.players[i] ? seat(l.players[i]) : empty)).join('')}</div>`;
+    el.innerHTML = `<div class="four-head"><div class="ic">${l.teams ? '🤝' : '👥'}</div><div><h3>${l.teams ? '2 vs 2 – Lobby' : '4er-Lobby'} <span class="tag">⏱️ ${timeLabel(l.timeMs)}</span></h3><p>Teile den Code – bis zu 4 Spieler. ${host ? 'Freie Plätze füllst du mit Bots.' : 'Der Gastgeber startet das Spiel.'}</p></div></div>
       <div class="four-lobby">
         <div class="code-wrap ${hidden ? 'hidden-code' : ''}">${codeDigits(l.code)}<button class="code-eye" id="four-eye">${hidden ? '👁️ Code anzeigen' : '🙈'}</button></div>
-        <div class="four-seats">${[0, 1, 2, 3].map((i) => { const p = l.players[i]; return p ? `<div class="seat on">${avatar(p.avatar, 34)}<b>${esc(p.name)}</b>${p.id === l.host ? '<span class="tag">Host</span>' : ''}</div>` : '<div class="seat"><span class="seat-empty">🤖</span><span class="muted">frei – wird Bot</span></div>'; }).join('')}</div>
+        ${seats}
       </div>
       <div class="room-actions four-actions-row">
         <button class="btn" id="four-big">🔍 Groß zeigen</button><button class="btn" id="four-link">🔗 Link</button>
-        ${host ? `<button class="btn primary" id="four-go">▶ Starten (${4 - l.players.length} Bot${4 - l.players.length === 1 ? '' : 's'})</button>` : '<span class="muted small" style="align-self:center">Warte auf den Start…</span>'}
+        ${l.teams ? '<button class="btn" id="four-swap">🔄 Team wechseln</button>' : ''}
+        ${host ? `<button class="btn primary" id="four-go">▶ Starten${bots ? ` (${bots} Bot${bots === 1 ? '' : 's'})` : ''}</button>` : '<span class="muted small" style="align-self:center">Warte auf den Start…</span>'}
         <button class="btn danger" id="four-leave">✕ Verlassen</button>
       </div>`;
     $('#four-eye').onclick = () => { state.codeHidden = !hidden; renderFourCard(); };
     $('#four-big').onclick = () => showBigCode(l.code, false);
     $('#four-link').onclick = () => copy(inviteLink(l.code), 'Einladungslink kopiert!');
     $('#four-leave').onclick = () => { socket.emit('four:leave'); state.fourLobby = null; renderFourCard(); };
+    const sw = $('#four-swap'); if (sw) sw.onclick = async () => { const r = await emit('four:team'); if (r.error) toast(esc(r.error), 'warn'); };
     const goBtn = $('#four-go'); if (goBtn) goBtn.onclick = async () => { const r = await emit('four:start'); if (r.error) toast(esc(r.error), 'warn'); };
   } else {
-    el.innerHTML = `<div class="four-head"><div class="ic">👥</div><div><h3>4er-Schach <span class="tag new-tag">NEU</span></h3>
-      <p>Vier Spieler, ein riesiges Brett – jeder gegen jeden. Wer matt ist, fliegt raus, der Letzte gewinnt. Leere Plätze übernehmen Bots.</p></div></div>
+    const teams = mode === 'teams';
+    el.innerHTML = `<div class="four-head"><div class="ic">${teams ? '🤝' : '👥'}</div><div><h3>${teams ? '2 vs 2' : '4er-Schach'} <span class="tag new-tag">NEU</span></h3>
+      <p>${teams ? 'Zwei Teams auf dem großen Brett: Rot & Gelb gegen Blau & Grün. Partner sitzen sich gegenüber und können sich nicht schlagen. Ist einer matt, verliert sein Team.' : 'Vier Spieler, ein riesiges Brett – jeder gegen jeden. Wer matt ist, fliegt raus, der Letzte gewinnt.'} Leere Plätze übernehmen Bots.</p></div></div>
+      <div class="seg mode-seg" id="four-mode"><button data-m="teams" class="${teams ? 'on' : ''}">🤝 2 vs 2</button><button data-m="ffa" class="${teams ? '' : 'on'}">👥 Jeder gegen jeden</button></div>
       <div class="four-row">
-        <div class="seg" id="four-time">${FOUR_TIMES.map(([v, lb]) => `<button data-t="${v}" class="${v === t ? 'on' : ''}">${lb}</button>`).join('')}</div>
-        <button class="btn primary" id="four-create">👥 Lobby erstellen</button>
-        <button class="btn" id="four-solo">🤖 Gegen 3 Bots</button>
+        ${timeSeg('four-time', FOUR_TIMES, t)}
+        <button class="btn primary" id="four-create">${teams ? '🤝' : '👥'} Lobby erstellen</button>
+        <button class="btn" id="four-solo">🤖 ${teams ? 'Du + Bot gegen 2 Bots' : 'Gegen 3 Bots'}</button>
       </div>
-      <p class="muted small" style="margin:0">Platz 1: ${coinHTML(300)} · Platz 2: ${coinHTML(120)} · Platz 3: ${coinHTML(60)} · Platz 4: ${coinHTML(25)} – mit Bots weniger. Freunde treten mit dem Code bei „Code eingeben“ bei.</p>`;
+      <p class="muted small" style="margin:0">${teams ? `Siegerteam: ${coinHTML(220)} pro Spieler · Verlierer: ${coinHTML(30)}` : `Platz 1: ${coinHTML(300)} · Platz 2: ${coinHTML(120)} · Platz 3: ${coinHTML(60)} · Platz 4: ${coinHTML(25)}`} – mit Bots weniger. Freunde treten mit dem Code bei „Code eingeben“ bei – oder lade eine ganze Gruppe unter „Freunde“ ein.</p>`;
+    $$('#four-mode button').forEach((b) => b.onclick = () => { state.fourMode = b.dataset.m; localStorage.setItem('fourMode', b.dataset.m); renderFourCard(); });
     $$('#four-time button').forEach((b) => b.onclick = () => { state.fourTime = +b.dataset.t; renderFourCard(); });
     $('#four-create').onclick = async () => {
-      const r = await emit('four:create', { timeMs: t });
+      const r = await emit('four:create', { timeMs: t, teams });
       if (r.error) return toast(esc(r.error), 'warn');
       state.fourLobby = r.lobby; renderFourCard(); sound.notify();
     };
-    $('#four-solo').onclick = async () => { const r = await emit('four:solo', { timeMs: t }); if (r.error) toast(esc(r.error), 'warn'); };
+    $('#four-solo').onclick = async () => { const r = await emit('four:solo', { timeMs: t, teams }); if (r.error) toast(esc(r.error), 'warn'); };
   }
 }
 socket.on('four:lobby', (l) => {
@@ -1080,28 +1298,31 @@ function fourClockLeft(c) {
 }
 function renderFourSide() {
   const g = state.four; if (!g) return;
-  const order = [0, 1, 2, 3];
+  const order = g.teams ? [0, 2, 1, 3] : [0, 1, 2, 3];
+  const partner = g.teams && g.you >= 0 ? (g.you + 2) % 4 : -1;
   const reasonTxt = { checkmate: 'Schachmatt', stalemate: 'Patt', resign: 'aufgegeben', timeout: 'Zeit abgelaufen', abandon: 'Verbindung weg', points: 'weniger Material' };
   const outOf = Object.fromEntries(g.out.map((o) => [o.color, o.reason]));
-  $('#four-players').innerHTML = `<h4>Spieler</h4>${order.map((c) => {
+  $('#four-players').innerHTML = `<h4>${g.teams ? '2 vs 2' : 'Spieler'}</h4>${order.map((c, i) => {
     const p = g.players[c], alive = g.alive[c];
-    return `<div class="fp ${g.turn === c && alive && g.status === 'playing' ? 'turn' : ''} ${alive ? '' : 'out'} ${c === g.you ? 'me' : ''}" style="--fc:${COLOR_HEX[c]}" data-c="${c}">
+    const head = g.teams && i % 2 === 0 ? `<div class="team-h ${g.status === 'over' && g.winTeam === c % 2 ? 'won' : ''}">${teamDots(c % 2)} Team ${TEAM_NAMES[c % 2]}${g.you >= 0 && c % 2 === g.you % 2 ? ' · dein Team' : ''}${g.status === 'over' && g.winTeam === c % 2 ? ' 🏆' : ''}</div>` : '';
+    return `${head}<div class="fp ${g.turn === c && alive && g.status === 'playing' ? 'turn' : ''} ${alive ? '' : 'out'} ${c === g.you ? 'me' : ''}" style="--fc:${COLOR_HEX[c]}" data-c="${c}">
       ${fourDot(c)}${avatar(p.avatar, 32)}
-      <div class="fp-name"><b>${esc(p.name)}</b><span>${COLOR_NAMES[c]}${c === g.you ? ' · Du' : ''}${p.bot ? ' · Bot' : ''}${!p.bot && p.online === false && alive ? ' · 📡 offline' : ''}</span></div>
+      <div class="fp-name"><b>${esc(p.name)}</b><span>${COLOR_NAMES[c]}${c === g.you ? ' · Du' : ''}${c === partner ? ' · Partner' : ''}${p.bot ? ' · Bot' : ''}${!p.bot && p.online === false && alive ? ' · 📡 offline' : ''}</span></div>
       <div class="fp-right">${alive ? `<span class="fp-clock" data-c="${c}">${fmtClock(fourClockLeft(c))}</span>` : `<span class="fp-out">☠️ ${reasonTxt[outOf[c]] || 'raus'}</span>`}</div>
     </div>`;
   }).join('')}`;
   const meAlive = g.alive[g.you];
   let st;
-  if (g.status === 'over') st = '🏁 Partie beendet';
+  if (g.status === 'over') st = g.teams && g.you >= 0 ? (g.winTeam === g.you % 2 ? '🏆 Dein Team hat gewonnen!' : '🏁 Dein Team hat verloren') : '🏁 Partie beendet';
   else if (!meAlive) st = '👀 Du bist ausgeschieden – du kannst weiter zuschauen.';
   else if (g.turn === g.you) st = `${fourDot(g.you)} <b>Du bist am Zug!</b>`;
+  else if (g.turn === partner) st = `${fourDot(g.turn)} Dein Partner ${esc(g.players[g.turn].name)} ist am Zug…`;
   else st = `${fourDot(g.turn)} ${esc(g.players[g.turn].name)} (${COLOR_NAMES[g.turn]}) ist am Zug…`;
   $('#four-status').innerHTML = st;
   $('#four-actions').innerHTML = g.status === 'playing' && meAlive
     ? '<button class="btn danger block" id="four-resign">🏳️ Aufgeben</button>'
     : '<button class="btn block" id="four-exit">↩️ Zur Lobby</button>';
-  const rs = $('#four-resign'); if (rs) rs.onclick = () => confirmBox('Aufgeben?', 'Du scheidest aus, deine Figuren werden grau.', 'Aufgeben', () => socket.emit('four:resign'));
+  const rs = $('#four-resign'); if (rs) rs.onclick = () => confirmBox('Aufgeben?', g.teams ? 'Dann verliert dein ganzes Team.' : 'Du scheidest aus, deine Figuren werden grau.', 'Aufgeben', () => socket.emit('four:resign'));
   const ex = $('#four-exit'); if (ex) ex.onclick = () => { if (state.four?.status === 'playing') socket.emit('four:leave'); state.four = null; go('play'); };
 }
 function tickFourClocks() {
@@ -1113,9 +1334,17 @@ function tickFourClocks() {
   }
 }
 window.__fourState = () => state.four; // für Tests
+// Deine Figuren (und im 2 vs 2 die deines Partners) in deinem eigenen Skin
+function fourLooks(d) {
+  if (d.you == null || d.you < 0) return null;
+  const looks = { [d.you]: { look: myLook(), side: 'w' } };
+  if (d.teams) looks[(d.you + 2) % 4] = { look: myLook(), side: 'b' };
+  return looks;
+}
 function applyFour(d, move = null) {
   state.four = { ...d, clockAt: performance.now() };
   ensureFourView();
+  fourBoard.setLooks(fourLooks(d));
   fourBoard.set(state.four, d.you, move);
   renderFourSide();
   clearInterval(fourTimer); fourTimer = setInterval(tickFourClocks, 250);
@@ -1125,7 +1354,11 @@ socket.on('four:start', (d) => {
   state.fourLobby = null; renderFourCard();
   applyFour(d);
   go('four');
-  if (!d.resumed) { sound.start(); toast(`👥 4er-Schach! Du spielst ${fourDot(d.you)} <b>${COLOR_NAMES[d.you]}</b>`, 'good'); }
+  if (!d.resumed) {
+    sound.start();
+    if (d.teams) toast(`🤝 2 vs 2! Du spielst ${fourDot(d.you)} <b>${COLOR_NAMES[d.you]}</b>, dein Partner ist ${fourDot((d.you + 2) % 4)} <b>${esc(d.players[(d.you + 2) % 4].name)}</b> (${COLOR_NAMES[(d.you + 2) % 4]}).`, 'good');
+    else toast(`👥 4er-Schach! Du spielst ${fourDot(d.you)} <b>${COLOR_NAMES[d.you]}</b>`, 'good');
+  }
   else toast('4er-Spiel fortgesetzt', 'good');
 });
 socket.on('four:state', (d) => {
@@ -1155,17 +1388,19 @@ socket.on('four:over', (d) => {
   const win = d.place === 1;
   win ? sound.win() : sound.notify();
   if (win) confetti();
-  const medal = ['🥇', '🥈', '🥉', '4.'];
-  const ov = openOverlay(`<div class="result-head ${win ? 'win' : 'draw'}"><div class="result-icon">${win ? '🏆' : medal[d.place - 1]}</div>
-      <h2>${win ? 'Du gewinnst das 4er-Schach!' : `Platz ${d.place}`}</h2><p class="muted">4er-Schach · ${d.bots ? `mit ${d.bots} Bot${d.bots > 1 ? 's' : ''}` : 'nur Menschen'}</p></div>
+  const medal = d.teams ? ['🏆', '✖️'] : ['🥇', '🥈', '🥉', '4.'];
+  const title = d.teams ? (win ? 'Dein Team gewinnt!' : 'Dein Team hat verloren') : (win ? 'Du gewinnst das 4er-Schach!' : `Platz ${d.place}`);
+  const ov = openOverlay(`<div class="result-head ${win ? 'win' : d.teams ? 'loss' : 'draw'}"><div class="result-icon">${win ? '🏆' : d.teams ? '💔' : medal[d.place - 1]}</div>
+      <h2>${title}</h2><p class="muted">${d.teams ? '2 vs 2' : '4er-Schach'} · ${d.bots ? `mit ${d.bots} Bot${d.bots > 1 ? 's' : ''}` : 'nur Menschen'}</p></div>
     <ol class="four-rank">${d.ranking.map((r) => `<li class="${r.color === d.you ? 'me' : ''}"><span>${medal[r.place - 1]}</span>${fourDot(r.color)}<b>${esc(r.name)}</b>${r.bot ? '<span class="tag">Bot</span>' : ''}<span class="muted small">${r.reason ? { checkmate: 'matt', stalemate: 'patt', resign: 'aufgegeben', timeout: 'Zeit', abandon: 'weg', points: 'weniger Material' }[r.reason] : 'Sieger'}</span></li>`).join('')}</ol>
     <div class="reward"><span class="pill coin-pill"><i class="coin" style="width:24px;height:24px"></i><b>+${d.coins}</b> Münzen</span></div>
     ${d.unrated ? `<div class="unrated">⚖️ <b>Nicht gewertet</b><span>${esc(d.unrated)}</span></div>` : ''}
-    <div class="modal-actions"><button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">🤖 Nochmal gegen Bots</button></div>`);
+    <div class="modal-actions"><button class="btn" data-r="lobby">Zur Lobby</button>${d.matchId ? '<button class="btn" data-r="replay">🎬 Replay</button>' : ''}<button class="btn primary" data-r="again">🤖 Nochmal gegen Bots</button></div>`);
   if (d.coins > 0) setTimeout(() => coinRain($('.reward .coin-pill', ov.el), $('#coin-count').parentElement, Math.min(18, 4 + Math.round(d.coins / 20)), (i) => { if (i % 3 === 0) sound.coin(); }), 350);
   $$('[data-r]', ov.el).forEach((b) => b.onclick = async () => {
+    if (b.dataset.r === 'replay') { ov.root.style.display = 'none'; openReplay(d.matchId, { onClose: () => { ov.root.style.display = ''; } }); return; }
     ov.close(); state.four = null;
-    if (b.dataset.r === 'again') { const r = await emit('four:solo', { timeMs: state.fourTime || 300000 }); if (r.error) toast(esc(r.error), 'warn'); }
+    if (b.dataset.r === 'again') { const r = await emit('four:solo', { timeMs: state.fourTime || 300000, teams: !!d.teams }); if (r.error) toast(esc(r.error), 'warn'); }
     else go('play');
   });
 });
@@ -1186,7 +1421,8 @@ socket.on('match:vote', (d) => {
     <div class="vote-bar"><i></i></div>
   </div>`);
   const grid = $('.vote-grid', content);
-  const skins = { w: d.players.w.equipped.pieces, b: d.players.b.equipped.pieces };
+  const skins = { w: pieceLook(d.players.w.equipped), b: pieceLook(d.players.b.equipped) };
+  skins[d.you] = myLook(); // eigene Seite immer im eigenen Skin
   d.options.forEach((o) => {
     const b = findItem('board', o.board) || BOARDS[0];
     const card = html(`<div class="vote-card" data-board="${o.board}">
@@ -1411,6 +1647,7 @@ socket.on('game:start', (d) => {
   $$('.overlay').forEach((o) => o.remove());
   state.bot = null;
   state.searching = false; state.room = null;
+  d.skins = { ...d.skins, [d.you]: myLook() }; // deine Figuren immer in deinem eigenen Skin
   const g = state.game = { ...d, active: true, sans: d.moves.map((m) => m.san), clockAt: performance.now(), marks: {}, fens: [], anaChess: d.startFen ? new Chess(d.startFen) : new Chess() };
   for (const m of d.moves) { g.fens.push(g.anaChess.fen()); try { g.anaChess.move(m.san); } catch { /* egal */ } }
   setupBoardLook(d.board, d.skins, d.you);
@@ -1635,11 +1872,11 @@ socket.on('game:over', async (d) => {
   if (d.finisher) {
     await mateFx();
     const { playFinisher } = await import('./finisher.js');
-    await playFinisher({ finisher: d.finisher, fen: d.fen, boardTheme: d.board, skins: d.skins, loserColor, winnerName: d.winnerName, attackerSq: board.lastMove?.to });
+    await playFinisher({ finisher: d.finisher, fen: d.fen, boardTheme: d.board, skins: { ...d.skins, [g.you]: myLook() }, loserColor, winnerName: d.winnerName, attackerSq: board.lastMove?.to });
   }
   if (d.reason === 'resign') await throwBoard();
   setProfile(d.profile, { coinsAnim: true });
-  showResult({ outcome: d.outcome, reason: d.reason, coins: d.coins, rating: d.ratingChange, online: true, unrated: d.unrated, variant: d.variant });
+  showResult({ outcome: d.outcome, reason: d.reason, coins: d.coins, rating: d.ratingChange, online: true, unrated: d.unrated, variant: d.variant, matchId: d.id });
 });
 
 async function spectatorOver(g, d) {
@@ -1672,7 +1909,7 @@ async function throwBoard() {
   board.load(board.fen, board.lastMove, false);
 }
 
-function showResult({ outcome, reason, coins, rating, online, bot, training = false, unrated = null, variant = null }) {
+function showResult({ outcome, reason, coins, rating, online, bot, training = false, unrated = null, variant = null, matchId = null }) {
   if (reason === 'abandon' && outcome === 'win') {
     // Gegner hat das Spiel verlassen: keine Wertung für den, der bleibt
     sound.notify();
@@ -1694,12 +1931,14 @@ function showResult({ outcome, reason, coins, rating, online, bot, training = fa
     ${unrated ? `<div class="unrated">⚖️ <b>Nicht gewertet</b><span>${esc(unrated)}</span></div>` : variant === 'queens' ? '<p class="muted" style="text-align:center;font-size:13px;margin-top:12px">👑 Queen-Modus zählt nicht für Elo.</p>' : ''}
     ${outcome === 'win' && reason === 'checkmate' ? '' : outcome === 'win' ? '<p class="muted" style="text-align:center;font-size:13px;margin-top:16px">Tipp: Gewinne per Schachmatt, um deinen 3D-Finisher zu sehen!</p>' : ''}
     <div class="modal-actions">
+      ${matchId ? '<button class="btn" data-r="replay">🎬 Replay</button>' : ''}
       ${online ? '<button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">⚡ Neues Match</button>'
                : '<button class="btn" data-r="bots">Anderer Bot</button><button class="btn primary" data-r="rematch">🔁 Nochmal</button>'}
     </div>`);
   if (outcome === 'win') confetti();
   if (coins > 0) setTimeout(() => coinRain($('.reward .coin-pill', ov.el), $('#coin-count').parentElement, Math.min(18, 4 + Math.round(coins / 20)), (i) => { if (i % 3 === 0) sound.coin(); }), 350);
   $$('[data-r]', ov.el).forEach((b) => b.onclick = () => {
+    if (b.dataset.r === 'replay') { ov.root.style.display = 'none'; openReplay(matchId, { onClose: () => { ov.root.style.display = ''; } }); return; }
     ov.close();
     const r = b.dataset.r;
     if (r === 'lobby') go('play');
@@ -1824,7 +2063,7 @@ function startBot(id, { queens = false } = {}) {
   state.bot = { bot, color, chess: startFen ? new Chess(startFen) : new Chess(), startFen, queens, moves: [], fens: [], marks: {}, over: false, thinking: false, token: ++reqId, training: !!state.training, eval: 0 };
   clearHint();
   const p = state.profile;
-  setupBoardLook(p.equipped.board, { w: p.equipped.pieces, b: p.equipped.pieces }, color);
+  setupBoardLook(p.equipped.board, mySkins(), color);
   board.load(state.bot.chess.fen(), null, false);
   setBanner('');
   renderBotGame();
@@ -1937,13 +2176,13 @@ async function finishBot(resigned) {
     const p = state.profile;
     await playFinisher({
       finisher: outcome === 'win' ? p.equipped.finisher : s.bot.finisher, fen: c.fen(), boardTheme: p.equipped.board,
-      skins: { w: p.equipped.pieces, b: p.equipped.pieces }, loserColor: c.turn(), winnerName: outcome === 'win' ? p.name : s.bot.name, attackerSq: c.history({ verbose: true }).at(-1)?.to,
+      skins: mySkins(), loserColor: c.turn(), winnerName: outcome === 'win' ? p.name : s.bot.name, attackerSq: c.history({ verbose: true }).at(-1)?.to,
     });
   }
   if (reason === 'resign') await throwBoard();
   const r = await req;
   if (r?.profile) setProfile(r.profile, { coinsAnim: true });
-  showResult({ outcome, reason, coins: r?.coins ?? 0, bot: s.bot, training: s.training ? 'training' : s.queens ? 'queens' : false });
+  showResult({ outcome, reason, coins: r?.coins ?? 0, bot: s.bot, training: s.training ? 'training' : s.queens ? 'queens' : false, matchId: r?.matchId || null });
 }
 
 // ================================================================ Shop
@@ -1951,10 +2190,10 @@ function renderShop() {
   const p = state.profile; if (!p) return;
   const root = $('#view-shop');
   const tab = state.shopTab;
-  const items = { board: BOARDS, pieces: PIECES, finisher: FINISHERS, bundle: [] }[tab] || [];
+  const items = { board: BOARDS, pieces: PIECES, shape: SHAPES, finisher: FINISHERS, bundle: [] }[tab] || [];
   root.innerHTML = `<div class="section-title"><div><h2>Shop</h2><p>Verdiene Münzen mit jedem Spiel und gestalte dein Schach, wie du willst.</p></div>
     <span class="pill coin-pill" style="font-size:18px;padding:12px 18px"><i class="coin" style="width:22px;height:22px"></i>${fmtNum(p.coins)}</span></div>
-    <div class="tabs">${[['bundle', '🎁 Pakete'], ['board', '🎨 Bretter'], ['pieces', '♟️ Figuren'], ['finisher', '💥 Finisher']].map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="tabs">${[['bundle', '🎁 Pakete'], ['board', '🎨 Bretter'], ['pieces', '♟️ Figuren'], ['shape', '🔷 Formen'], ['finisher', '💥 Finisher']].map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="shop-grid"></div>`;
   $$('[data-tab]', root).forEach((b) => b.onclick = () => { state.shopTab = b.dataset.tab; renderShop(); });
   const grid = $('.shop-grid', root);
@@ -1993,19 +2232,27 @@ function renderShop() {
     }
     return;
   }
+  if (tab === 'shape') grid.insertAdjacentHTML('beforebegin', '<p class="muted small shop-note">Formen ändern die Silhouette deiner Figuren – die Farben kommen weiter von deinem Figuren-Skin. Du kannst jede Form mit jedem Skin kombinieren.</p>');
   for (const it of items) {
-    const owned = p.owned[tab].includes(it.id), equipped = p.equipped[tab] === it.id;
-    const card = html(`<div class="card shop-item ${equipped ? 'equipped' : ''}">
+    const owned = (p.owned[tab] || ['klassisch']).includes(it.id), equipped = (p.equipped[tab] || 'klassisch') === it.id;
+    const card = html(`<div class="card shop-item ${equipped ? 'equipped' : ''} ${it.view3d ? 'ultra' : ''}">
       ${equipped ? '<span class="ribbon">Ausgerüstet</span>' : owned ? '<span class="ribbon owned">Besitz</span>' : ''}
-      <div class="prev"></div><h4>${esc(it.name)}</h4><p>${esc(it.desc)}</p>
+      ${it.view3d ? '<span class="ribbon new">NEU · 3D</span>' : ''}
+      <div class="prev"></div><h4>${it.icon && tab === 'shape' ? it.icon + ' ' : ''}${esc(it.name)}</h4><p>${esc(it.desc)}</p>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
         ${owned ? '<span class="muted" style="font-size:13px">✔ Freigeschaltet</span>' : it.price === 0 ? '<span class="muted">Gratis</span>' : coinHTML(it.price)}
         ${equipped ? '<button class="btn sm" disabled>✓ Aktiv</button>' : owned ? '<button class="btn sm primary" data-eq>Ausrüsten</button>'
           : `<button class="btn sm gold" data-buy ${p.coins < it.price ? 'disabled' : ''}>Kaufen</button>`}
       </div></div>`);
     const prev = $('.prev', card);
-    if (tab === 'board') prev.appendChild(miniBoard(it.id, { w: p.equipped.pieces, b: p.equipped.pieces }));
-    if (tab === 'pieces') prev.appendChild(miniBoard(p.equipped.board, { w: it.id, b: it.id }, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'));
+    if (tab === 'board') prev.appendChild(miniBoard(it.id, mySkins()));
+    if (tab === 'pieces') { const lk = pieceLook({ pieces: it.id, shape: p.equipped.shape }); prev.appendChild(miniBoard(p.equipped.board, { w: lk, b: lk }, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR')); }
+    if (tab === 'shape') {
+      const lk = pieceLook({ pieces: p.equipped.pieces, shape: it.id });
+      prev.classList.add('shape-prev');
+      prev.innerHTML = `<div class="shape-row">${['k', 'q', 'r', 'b', 'n', 'p'].map((t) => `<i style="background-image:${pieceURL(t, 'w', lk).replace(/"/g, '&quot;')}"></i>`).join('')}</div>
+        <div class="shape-row dark">${['p', 'n', 'b', 'r', 'q', 'k'].map((t) => `<i style="background-image:${pieceURL(t, 'b', lk).replace(/"/g, '&quot;')}"></i>`).join('')}</div>`;
+    }
     if (tab === 'finisher') {
       const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff', midas: '#ffc53d', ak: '#ff8a3a', feuersturm: '#ff4a1a', rakete: '#ff9a3a', ufo: '#7fff9a', supernova: '#cfe8ff', portal: '#9a7cff', krake: '#b46cff', bowling: '#5a3cff', schwerkraft: '#8ab4ff', shuriken: '#d7dde4', lawine: '#e8f4ff', viertewand: '#bfe9ff', riss: '#ff4fd8' };
       prev.style.padding = '0';
@@ -2038,7 +2285,7 @@ function confirmBuy(kind, it) {
 async function previewFinisher(id) {
   const p = state.profile;
   const { playFinisher } = await import('./finisher.js');
-  await playFinisher({ finisher: id, fen: 'r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4', boardTheme: p.equipped.board, skins: { w: p.equipped.pieces, b: p.equipped.pieces }, loserColor: 'b', winnerName: p.name, subtitle: 'Vorschau', attackerSq: 'f7' });
+  await playFinisher({ finisher: id, fen: 'r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4', boardTheme: p.equipped.board, skins: mySkins(), loserColor: 'b', winnerName: p.name, subtitle: 'Vorschau', attackerSq: 'f7' });
 }
 
 // ================================================================ Profil
@@ -2057,7 +2304,7 @@ function renderProfile() {
       </div>
       <div class="equip-row">
         <span class="pill">🎨 ${esc(findItem('board', p.equipped.board)?.name)}</span>
-        <span class="pill">♟️ ${esc(findItem('pieces', p.equipped.pieces)?.name)}</span>
+        <span class="pill">♟️ ${esc(findItem('pieces', p.equipped.pieces)?.name)}${p.equipped.shape && p.equipped.shape !== 'klassisch' ? ` · ${esc(findItem('shape', p.equipped.shape)?.name)}` : ''}</span>
         <span class="pill">${findItem('finisher', p.equipped.finisher)?.icon} ${esc(findItem('finisher', p.equipped.finisher)?.name)}</span>
       </div>
     </div>
@@ -2079,7 +2326,7 @@ function renderProfile() {
       </div>
       <div class="card">
         <div class="card-head"><h3>Letzte Partien</h3></div>
-        <ul class="history">${p.history.length ? p.history.map((h) => `<li>${avatar(h.oppAvatar, 36)}
+        <ul class="history">${p.history.length ? p.history.map((h) => `<li ${h.matchId ? `class="clickable" data-replay="${esc(h.matchId)}" title="Replay ansehen"` : ''}>${avatar(h.oppAvatar, 36)}
           <div><b>${esc(h.opponent)}</b> ${h.type === 'bot' ? '<span class="tag">Bot</span>' : ''}<div class="muted" style="font-size:12px">${REASONS[h.reason] || ''} · ${timeAgo(h.at)}</div></div>
           <div class="res"><b class="res-${h.outcome}">${h.outcome === 'win' ? 'Sieg' : h.outcome === 'loss' ? 'Niederlage' : 'Remis'}</b>
           <div class="muted">+${h.coins} 🪙 ${h.type === 'online' ? `· ${h.rating >= 0 ? '+' : ''}${h.rating} Elo` : ''}</div></div></li>`).join('') : '<li class="muted">Noch keine Partien gespielt.</li>'}</ul>
@@ -2120,6 +2367,7 @@ function renderProfile() {
   save.onclick = doSave;
   nameIn.onkeydown = (e) => { if (e.key === 'Enter') doSave(); };
   $('#pc-copy').onclick = () => copy(p.code, 'Spielercode kopiert!');
+  $$('[data-replay]', root).forEach((li) => li.onclick = () => openReplay(li.dataset.replay));
   $('#av-edit').onclick = () => $('#avatar-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
   const setAv = async (avatarObj) => {
     const r = await emit('profile:update', { avatar: avatarObj });
@@ -2224,6 +2472,61 @@ function resizeImage(file, size) {
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
   });
+}
+
+// ================================================================ Replays (eigene Partien)
+const RP_FILTERS = [['', 'Alle'], ['online', '⚔️ Online'], ['four', '🤝 2v2 & 4er'], ['bot', '🤖 Bots']];
+async function renderReplays() {
+  const root = $('#view-replays');
+  const type = state.replayType || '';
+  root.innerHTML = `<div class="section-title"><div><h2>🎬 Replays</h2><p>Deine Partien zum Nachspielen – Zug für Zug, mit Abspielen und Vorspulen.</p></div></div>
+    <div class="tabs">${RP_FILTERS.map(([k, l]) => `<button data-rt="${k}" class="${k === type ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <div class="card"><div class="rp-list" id="rp-list"><p class="muted">Lade…</p></div></div>`;
+  $$('[data-rt]', root).forEach((b) => b.onclick = () => { state.replayType = b.dataset.rt; renderReplays(); });
+  const list = $('#rp-list');
+  const me = state.profile?.id;
+  const row = (m) => {
+    const when = new Date(m.at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+    let icon = MATCH_ICON[m.type], who = '', res = '', cls = '';
+    if (m.type === 'online') {
+      const mine = m.players?.w?.id === me ? 'w' : 'b', opp = m.players?.[mine === 'w' ? 'b' : 'w'] || {};
+      const o = m.result === 'draw' ? 'draw' : m.result === mine ? 'win' : 'loss';
+      who = `<b>gegen ${esc(opp.name || '?')}</b><small>${mine === 'w' ? 'Weiß' : 'Schwarz'} · ${m.timeMs ? timeLabel(m.timeMs) : 'ohne Uhr'}${m.variant === 'queens' ? ' · 👑' : ''}</small>`;
+      res = { win: 'Sieg', loss: 'Niederlage', draw: 'Remis' }[o]; cls = `res-${o}`;
+      const d = m.players?.[mine]?.d; if (d) res += ` <small class="${d > 0 ? 'res-win' : 'res-loss'}">${d > 0 ? '+' : ''}${d} Elo</small>`;
+    } else if (m.type === 'four') {
+      icon = m.teams ? '🤝' : '👥';
+      const mine = (m.players || []).find((p) => p.uid === me);
+      const others = (m.players || []).filter((p) => p !== mine);
+      if (m.teams) {
+        const partner = others.find((p) => p.color % 2 === mine?.color % 2);
+        const opps = others.filter((p) => p.color % 2 !== mine?.color % 2);
+        who = `<b>2 vs 2 mit ${esc(partner?.name || '?')}</b><small>gegen ${opps.map((p) => esc(p.name)).join(' & ')}</small>`;
+        res = mine?.place === 1 ? 'Sieg' : 'Niederlage'; cls = mine?.place === 1 ? 'res-win' : 'res-loss';
+      } else {
+        who = `<b>4er-Schach</b><small>${others.map((p) => esc(p.name)).join(' · ')}</small>`;
+        res = mine ? `Platz ${mine.place}` : ''; cls = mine?.place === 1 ? 'res-win' : '';
+      }
+    } else {
+      who = `<b>gegen ${m.players?.bot?.avatar || ''} ${esc(m.players?.bot?.name || 'Bot')}</b><small>${m.players?.user?.color === 'w' ? 'Weiß' : 'Schwarz'}</small>`;
+      res = { win: 'Sieg', loss: 'Niederlage', draw: 'Remis' }[m.result] || ''; cls = `res-${m.result}`;
+    }
+    return `<button class="rp-item" data-mid="${esc(m.id)}"><span class="am-icon">${icon}</span><span class="rp-who">${who}</span>
+      <span class="rp-res"><b class="${cls}">${res}</b><small>${REASONS[m.reason] || ''}${m.plies ? ` · ${m.plies} Halbzüge` : ''}</small></span>
+      <span class="rp-when">${when}</span><span class="rp-play">▶</span></button>`;
+  };
+  const load = async (before = null) => {
+    const r = await emit('replays:list', { before, type: type || null });
+    if (r.error) { list.innerHTML = `<p class="form-error">${esc(r.error)}</p>`; return; }
+    r.list ||= []; // statische Version ohne Server: keine Replays
+    if (!before) list.innerHTML = '';
+    list.querySelector('.am-more')?.remove();
+    if (!r.list.length && !before) { list.innerHTML = '<div class="rp-empty"><div style="font-size:42px">🎬</div><b>Noch keine Replays</b><span class="muted small">Spiel eine Partie – online, 2 vs 2 oder gegen einen Bot – dann kannst du sie hier nachspielen.</span></div>'; return; }
+    list.insertAdjacentHTML('beforeend', r.list.map(row).join(''));
+    if (r.list.length >= 30) { list.insertAdjacentHTML('beforeend', '<button class="btn block am-more">Ältere laden</button>'); list.querySelector('.am-more').onclick = () => load(r.list.at(-1).at); }
+    $$('.rp-item:not([data-wired])', list).forEach((b) => { b.dataset.wired = 1; b.onclick = () => openReplay(b.dataset.mid); });
+  };
+  load();
 }
 
 // ================================================================ Rangliste

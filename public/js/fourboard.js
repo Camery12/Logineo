@@ -1,6 +1,6 @@
 // 4er-Schach-Brett: 14×14 ohne Ecken, jeder sieht seine eigene Farbe unten
-import { N, valid, legalMoves, inCheck, kingSquare } from './four.js';
-import { pieceURL4 } from './pieces.js';
+import { N, valid, legalMoves, inCheck, kingSquare, COLOR_HEX } from './four.js';
+import { pieceURL4, pieceURL } from './pieces.js';
 
 // Anzeige-Position eines Feldes je nach Blickrichtung (Farbe unten)
 function view(r, c, me) {
@@ -22,6 +22,9 @@ export class FourBoard {
     this.pieceEls = new Map();
     el.addEventListener('pointerdown', (e) => this._click(e));
   }
+
+  // looks: { [farbe]: { look: 'skin@form', side: 'w' | 'b' } } – eigene (Team-)Figuren im eigenen Skin
+  setLooks(looks) { this.looks = looks || null; }
 
   setTheme(light, dark) { this.el.style.setProperty('--fl', light); this.el.style.setProperty('--fd', dark); }
 
@@ -54,9 +57,12 @@ export class FourBoard {
       const color = p.dead ? 4 : p.c;
       const key = `${i}`;
       let el = this.pieceEls.get(key);
-      const img = pieceURL4(p.t, color);
+      const lk = !p.dead && this.looks?.[p.c];
+      const img = lk ? pieceURL(p.t, lk.side, lk.look) : pieceURL4(p.t, color);
       if (!el) { el = document.createElement('div'); el.className = 'fpc'; this.pcLayer.appendChild(el); }
       el.style.backgroundImage = img;
+      el.classList.toggle('skinned', !!lk);
+      if (lk) el.style.setProperty('--fc', COLOR_HEX[p.c]); else el.style.removeProperty('--fc');
       el.classList.toggle('dead', !!p.dead);
       if (move && move.to === i && !layoutChanged) {
         el.style.transition = 'none';

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import compression from 'compression';
 import { Chess } from 'chess.js';
-import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
+import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, pieceLook, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
 import { checkUsername, badWord, badChat } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
@@ -29,7 +29,7 @@ const freshBoot = () => Date.now() - BOOT < 20 * 60_000;
 // Ohne MONGODB_URI wird eine JSON-Datei benutzt (geht bei Render-Free bei jedem Update verloren).
 const MONGO_URI = process.env.MONGODB_URI;
 let db = { users: {} };
-let mongoUsers = null, mongoMusic = null, mongoGames = null, mongoChats = null, mongoMatches = null;
+let mongoUsers = null, mongoMusic = null, mongoGames = null, mongoChats = null, mongoMatches = null, mongoGroups = null;
 const INSTANCE = crypto.randomUUID(); // jede Server-Instanz hat eine eigene Kennung
 const lastSaved = new Map(); // userId -> zuletzt gespeicherter JSON-Stand
 
@@ -43,6 +43,10 @@ async function loadDb() {
     mongoGames = client.db(process.env.MONGODB_DB || 'schacharena').collection('games');
     mongoChats = client.db(process.env.MONGODB_DB || 'schacharena').collection('chats');
     mongoMatches = client.db(process.env.MONGODB_DB || 'schacharena').collection('matches');
+    mongoGroups = client.db(process.env.MONGODB_DB || 'schacharena').collection('groups');
+    await mongoGroups.createIndex({ id: 1 }, { unique: true });
+    db.groups = {};
+    for (const doc of await mongoGroups.find({}).toArray()) { const { _id, ...gr } = doc; db.groups[gr.id] = gr; }
     await mongoMatches.createIndex({ id: 1 }, { unique: true });
     await mongoMatches.createIndex({ at: -1 });
     await mongoMatches.createIndex({ uids: 1 });
@@ -63,6 +67,7 @@ async function loadDb() {
     db.music ||= {};
     db.chats ||= {};
     db.matches ||= [];
+    db.groups ||= {};
     console.log(`⚠️  Keine MONGODB_URI gesetzt – speichere in ${DB_FILE} (geht bei Render-Free bei Updates verloren)`);
   }
 }
@@ -153,8 +158,8 @@ function createUser() {
     rating: 0,
     eloV2: true,
     stats: { games: 0, wins: 0, losses: 0, draws: 0, botWins: 0, botGames: 0, mates: 0 },
-    owned: { board: ['klassisch'], pieces: ['klassisch'], finisher: ['klassisch'] },
-    equipped: { board: 'klassisch', pieces: 'klassisch', finisher: 'klassisch' },
+    owned: { board: ['klassisch'], pieces: ['klassisch'], finisher: ['klassisch'], shape: ['klassisch'] },
+    equipped: { board: 'klassisch', pieces: 'klassisch', finisher: 'klassisch', shape: 'klassisch' },
     history: [],
     createdAt: Date.now(),
   };
@@ -167,6 +172,7 @@ function createUser() {
 function migrateUsers() {
   for (const u of Object.values(db.users)) {
     if (!u.eloV2) { u.rating = 0; u.eloV2 = true; }
+    ensureShape(u);
     let n = String(u.name || '').trim().replace(/\s+/g, '_');
     if (checkUsername(n) || byName.has(nameKey(n))) n = freeGuestName();
     u.name = n; byName.set(nameKey(n), u);
@@ -174,6 +180,13 @@ function migrateUsers() {
   save();
 }
 
+// Figuren-Formen (seit 1.15): ältere Profile bekommen die klassische Form
+function ensureShape(u) {
+  if (!u?.owned) return u;
+  if (!Array.isArray(u.owned.shape)) u.owned.shape = ['klassisch'];
+  if (!u.equipped.shape || !u.owned.shape.includes(u.equipped.shape)) u.equipped.shape = 'klassisch';
+  return u;
+}
 const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins }, style: styleOf(u) });
 const styleOf = (u) => { const c = customOf(u); return { frame: c.frame, nameFx: c.nameFx, banner: c.banner === 'bild' ? 'standard' : c.banner, accent: c.accent, admin: isAdmin(u) }; };
 // Admins: per Spielercode (fest, nicht änderbar). Weitere über ADMIN_CODES="code1,code2" bei Render.
@@ -306,7 +319,7 @@ function ensureVs(u) {
 }
 
 function broadcastStats() {
-  io.emit('stats', { live: liveGames().length, online: online.size, playing: [...games.values()].filter((g) => g.status !== 'over').length * 2 + [...games4.values()].filter((g) => g.status === 'playing').reduce((s, g) => s + g.humans, 0), queue: queue.length });
+  io.emit('stats', { live: liveGames().length, online: online.size, playing: [...games.values()].filter((g) => g.status !== 'over').length * 2 + [...games4.values()].filter((g) => g.status === 'playing').reduce((s, g) => s + g.humans, 0), queue: queue.length, queueBy: Object.fromEntries(RANDOM_TIMES.map((t) => [t, queue.filter((q) => (q.timeMs || 600_000) === t).length])) });
 }
 setInterval(broadcastStats, 5000);
 
@@ -323,7 +336,7 @@ function gamePayload(g, uid) {
     id: g.id, fen: g.chess.fen(), moves: hist, status: g.status, board: g.board,
     you: g.players.w === uid ? 'w' : 'b',
     players: { w: pub(db.users[g.players.w]), b: pub(db.users[g.players.b]) },
-    skins: { w: db.users[g.players.w].equipped.pieces, b: db.users[g.players.b].equipped.pieces },
+    skins: { w: pieceLook(db.users[g.players.w].equipped), b: pieceLook(db.users[g.players.b].equipped) },
     clock: clockState(g), timeMs: g.timeMs, drawOffer: g.drawOffer, boardDecision: g.boardDecision,
     variant: g.variant || null, startFen: g.startFen || null,
   };
@@ -455,14 +468,14 @@ function endGame(g, result, reason) {
     }
     if (outcome === 'win' && reason === 'checkmate' && !unrated) u.stats.mates++;
     ensureVs(u);
-    const hEntry = { type: 'online', opponent: opp.name, oppId: opp.id, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now(), ...(unrated ? { unrated } : {}), ...(g.variant ? { variant: g.variant } : {}) };
+    const hEntry = { type: 'online', matchId: g.id, opponent: opp.name, oppId: opp.id, oppAvatar: opp.avatar, outcome, reason, coins, rating: d, moves: plies, at: Date.now(), ...(unrated ? { unrated } : {}), ...(g.variant ? { variant: g.variant } : {}) };
     addVs(u, hEntry);
     u.history.unshift(hEntry);
     u.history = u.history.slice(0, 50);
     emitTo(u.id, 'game:over', {
       id: g.id, result, reason, outcome, coins, ratingChange: d, finisher, unrated, variant: g.variant || null,
       winnerName: winner?.name || null, fen: g.chess.fen(), board: g.board,
-      skins: { w: W.equipped.pieces, b: B.equipped.pieces }, profile: priv(u),
+      skins: { w: pieceLook(W.equipped), b: pieceLook(B.equipped) }, profile: priv(u),
     });
   }
   archiveMatch({
@@ -473,7 +486,7 @@ function endGame(g, result, reason) {
   {
     io.to(watchRoom(g)).emit('game:over', {
       id: g.id, result, reason, spectator: true, finisher, winnerName: winner?.name || null, fen: g.chess.fen(), board: g.board,
-      skins: { w: W.equipped.pieces, b: B.equipped.pieces }, players: { w: pub(W), b: pub(B) },
+      skins: { w: pieceLook(W.equipped), b: pieceLook(B.equipped) }, players: { w: pub(W), b: pub(B) },
     });
     io.in(watchRoom(g)).socketsLeave(watchRoom(g));
   }
@@ -495,6 +508,7 @@ function checkGameEnd(g) {
 
 // ---------------------------------------------------------------- 4er-Schach (Jeder gegen jeden)
 const FOUR_REWARDS = [300, 120, 60, 25];            // Münzen für Platz 1–4
+const TEAM_REWARDS = [220, 30];                     // 2 vs 2: Siegerteam / Verliererteam (je Spieler)
 const FOUR_BOT_FACTOR = [0, 1 / 3, 0.5, 0.75, 1];   // weniger Münzen, je mehr Bots mitspielen
 const FOUR_BOTS = [['Robo-Rudi', '🤖'], ['Kalle Kalkül', '🧮'], ['Turbo-Tina', '⚡'], ['Pixel-Paul', '👾'], ['Byte-Berta', '💾'], ['Captain Chip', '🦾']];
 const FOUR_ABANDON_MS = 60_000;
@@ -511,13 +525,28 @@ function fourBusy(uid) {
   for (const l of lobbies4.values()) if (l.seats.includes(uid)) return true;
   return false;
 }
-const lobbyPayload = (l) => ({ code: l.code, host: l.hostId, timeMs: l.timeMs, players: l.seats.map((id) => pub(db.users[id])) });
+const lobbyPayload = (l) => ({ code: l.code, host: l.hostId, timeMs: l.timeMs, teams: !!l.teams, side: l.side || {}, players: l.seats.map((id) => pub(db.users[id])) });
+const FOUR_TIMES = [60_000, 180_000, 300_000, 600_000, 900_000];
+const fourTime = (t) => (FOUR_TIMES.includes(t) ? t : 300_000);
+// 2 vs 2: freien Platz im kleineren Team suchen (je Team höchstens 2)
+function lobbySide(l) {
+  const n = [0, 1].map((t) => l.seats.filter((id) => l.side[id] === t).length);
+  return n[0] <= n[1] ? (n[0] < 2 ? 0 : 1) : (n[1] < 2 ? 1 : 0);
+}
+function createFourLobby(user, timeMs, teams) {
+  if (banErr(user)) return { error: banErr(user) };
+  if (userGame.has(user.id) || fourBusy(user.id)) return { error: 'Du bist bereits in einem Spiel oder einer Lobby.' };
+  let code; do code = digits(6); while (rooms.has(code) || lobbies4.has(code));
+  const l = { code, hostId: user.id, seats: [user.id], timeMs: fourTime(timeMs), teams: !!teams, side: { [user.id]: 0 } };
+  lobbies4.set(code, l);
+  return { lobby: lobbyPayload(l) };
+}
 function emitLobby(l, extra = {}) { for (const id of l.seats) emitTo(id, 'four:lobby', { ...lobbyPayload(l), ...extra }); }
 function leaveLobby(uid) {
   for (const [code, l] of lobbies4) {
     if (!l.seats.includes(uid)) continue;
     if (l.hostId === uid) { lobbies4.delete(code); for (const id of l.seats) if (id !== uid) emitTo(id, 'four:lobby', { closed: true }); }
-    else { l.seats = l.seats.filter((x) => x !== uid); emitLobby(l); }
+    else { l.seats = l.seats.filter((x) => x !== uid); delete l.side?.[uid]; emitLobby(l); }
   }
 }
 
@@ -533,15 +562,25 @@ function fourClock(g) {
 }
 const fourPayload = (g, uid, extra = {}) => ({
   id: g.id, board: g.state.board, turn: g.state.turn, alive: g.state.alive, out: g.state.out, last: g.state.last, ply: g.state.ply,
-  players: fourPlayers(g), clock: fourClock(g), timeMs: g.timeMs, you: uid ? fourColorOf(g, uid) : -1, status: g.status, ...extra,
+  players: fourPlayers(g), clock: fourClock(g), timeMs: g.timeMs, you: uid ? fourColorOf(g, uid) : -1, status: g.status,
+  teams: !!g.state.teams, winTeam: g.state.winTeam ?? -1, ...extra,
 });
 function fourBroadcast(g, ev, extra = {}) { for (const p of g.players) if (p.uid && userFour.get(p.uid) === g.id) emitTo(p.uid, ev, fourPayload(g, p.uid, extra)); }
 
-function startFour(humanIds, timeMs) {
-  const seats = shuffle([...humanIds, ...Array(4 - humanIds.length).fill(null)]);
+function startFour(humanIds, timeMs, { teams = false, side = {} } = {}) {
+  let seats;
+  if (teams) {
+    // Team 0 (Rot & Gelb) sitzt auf 0 und 2, Team 1 (Blau & Grün) auf 1 und 3
+    seats = [null, null, null, null];
+    for (const t of [0, 1]) {
+      const ids = shuffle(humanIds.filter((id) => (side[id] ?? 0) === t)).slice(0, 2);
+      shuffle([t, t + 2]).forEach((c, i) => { seats[c] = ids[i] || null; });
+    }
+  } else seats = shuffle([...humanIds, ...Array(4 - humanIds.length).fill(null)]);
+  humanIds = seats.filter(Boolean);
   const botNames = shuffle([...FOUR_BOTS]);
   const g = {
-    id: crypto.randomUUID(), state: Four.newState(), timeMs, clock: [timeMs, timeMs, timeMs, timeMs], lastTick: Date.now(),
+    id: crypto.randomUUID(), state: Four.newState({ teams }), timeMs, clock: [timeMs, timeMs, timeMs, timeMs], lastTick: Date.now(),
     status: 'playing', disconnect: {}, moves: [0, 0, 0, 0], humans: humanIds.length,
     players: seats.map((uid) => (uid ? { uid } : { bot: { name: botNames.pop()[0], avatar: null } })),
   };
@@ -578,6 +617,16 @@ const fourHumansAlive = (g) => g.players.some((p, c) => p.uid && g.state.alive[c
 function fourMaterial(g, c) { let m = 0; for (const p of g.state.board) if (p && p.c === c && !p.dead) m += Four.VALUE[p.t]; return m; }
 // Ende nach Punkten: wer am wenigsten Material hat, scheidet zuerst aus
 function fourByMaterial(g) {
+  if (g.state.teams) {
+    // 2 vs 2: das Team mit weniger Material verliert
+    const tm = [0, 1].map((t) => fourMaterial(g, t) + fourMaterial(g, t + 2));
+    const lose = tm[0] < tm[1] ? 0 : tm[1] < tm[0] ? 1 : crypto.randomInt(2);
+    const c = fourMaterial(g, lose) <= fourMaterial(g, lose + 2) ? lose : lose + 2;
+    (g.log ||= []).push({ t: 'x', c, reason: 'points' });
+    Four.eliminate(g.state, c, 'points');
+    g.state.over = true; g.state.winTeam = 1 - lose;
+    return;
+  }
   const alive = [0, 1, 2, 3].filter((c) => g.state.alive[c]).sort((a, b) => fourMaterial(g, a) - fourMaterial(g, b));
   for (const c of alive.slice(0, -1)) { (g.log ||= []).push({ t: 'x', c, reason: 'points' }); Four.eliminate(g.state, c, 'points'); }
   g.state.over = true;
@@ -630,11 +679,16 @@ function endFour(g) {
   g.status = 'over';
   clearTimeout(g.botTimer);
   for (const t of Object.values(g.disconnect)) clearTimeout(t);
-  const winner = g.state.alive.findIndex(Boolean);
-  const ranking = [winner, ...g.state.out.map((o) => o.color).reverse()].filter((c) => c >= 0);
+  const teams = !!g.state.teams;
+  const winTeam = teams ? (g.state.winTeam ?? Four.winningTeam(g.state)) : -1;
+  const winner = teams ? -1 : g.state.alive.findIndex(Boolean);
+  const ranking = teams
+    ? [winTeam, winTeam + 2, 1 - winTeam, 3 - winTeam].filter((c) => c >= 0 && c < 4)
+    : [winner, ...g.state.out.map((o) => o.color).reverse()].filter((c) => c >= 0);
+  const placeOf = (c, i) => (teams ? (c % 2 === winTeam ? 1 : 2) : i + 1);
   const reasons = Object.fromEntries(g.state.out.map((o) => [o.color, o.reason]));
   const players = fourPlayers(g);
-  const table = ranking.map((c, place) => ({ color: c, place: place + 1, name: players[c].name, bot: !!players[c].bot, reason: reasons[c] || null }));
+  const table = ranking.map((c, i) => ({ color: c, place: placeOf(c, i), name: players[c].name, bot: !!players[c].bot, reason: reasons[c] || null }));
   const factor = FOUR_BOT_FACTOR[g.humans] || 0;
   for (const [place, c] of ranking.entries()) {
     const uid = g.players[c].uid;
@@ -642,18 +696,21 @@ function endFour(g) {
     const u = db.users[uid];
     // Fair-Play: mindestens 16 Halbzüge insgesamt und 3 eigene Züge
     const unrated = g.state.ply < 16 ? 'Zu kurz – die Partie hatte zu wenige Züge.' : g.moves[c] < 3 ? 'Du hast weniger als 3 Züge gemacht.' : null;
-    const coins = unrated ? 0 : Math.round((FOUR_REWARDS[place] * factor) / 5) * 5;
+    const pl = placeOf(c, place), won = pl === 1;
+    const base = teams ? TEAM_REWARDS[won ? 0 : 1] : FOUR_REWARDS[place];
+    const coins = unrated ? 0 : Math.round((base * factor) / 5) * 5;
     u.coins += coins;
-    if (!unrated) { u.stats.four ||= { games: 0, wins: 0 }; u.stats.four.games++; if (place === 0) u.stats.four.wins++; }
-    (g.arch ||= {})[c] = { coins, counted: !unrated, win: place === 0 };
-    u.history.unshift({ type: 'four', opponent: '4er-Schach', oppAvatar: { type: 'emoji', value: '👥', color: '#334' }, outcome: place === 0 ? 'win' : 'loss', reason: place === 0 ? 'four-win' : 'four-place', place: place + 1, coins, rating: 0, moves: g.state.ply, at: Date.now(), ...(unrated ? { unrated } : {}) });
+    const sk = teams ? 'teams' : 'four';
+    if (!unrated) { u.stats[sk] ||= { games: 0, wins: 0 }; u.stats[sk].games++; if (won) u.stats[sk].wins++; }
+    (g.arch ||= {})[c] = { coins, counted: !unrated, win: won };
+    u.history.unshift({ type: 'four', teams, opponent: teams ? '2 vs 2' : '4er-Schach', oppAvatar: { type: 'emoji', value: teams ? '🤝' : '👥', color: '#334' }, outcome: won ? 'win' : 'loss', reason: teams ? (won ? 'team-win' : 'team-loss') : (won ? 'four-win' : 'four-place'), place: pl, coins, rating: 0, moves: g.state.ply, at: Date.now(), ...(unrated ? { unrated } : {}), matchId: g.id });
     u.history = u.history.slice(0, 50);
-    emitTo(uid, 'four:over', { ...fourPayload(g, uid), ranking: table, place: place + 1, coins, unrated, profile: priv(u), bots: 4 - g.humans });
+    emitTo(uid, 'four:over', { ...fourPayload(g, uid), ranking: table, place: pl, coins, unrated, profile: priv(u), bots: 4 - g.humans, matchId: g.id });
   }
   archiveMatch({
-    id: g.id, type: 'four', at: Date.now(), timeMs: g.timeMs, humans: g.humans, plies: g.state.ply, log: g.log || [],
+    id: g.id, type: 'four', teams, winTeam, at: Date.now(), timeMs: g.timeMs, humans: g.humans, plies: g.state.ply, log: g.log || [],
     uids: g.players.filter((p) => p.uid).map((p) => p.uid),
-    players: g.players.map((p, c) => ({ color: c, uid: p.uid || null, name: players[c].name, bot: !!p.bot, place: ranking.indexOf(c) + 1, reason: reasons[c] || null, ...(g.arch?.[c] || {}) })),
+    players: g.players.map((p, c) => ({ color: c, uid: p.uid || null, name: players[c].name, bot: !!p.bot, place: placeOf(c, ranking.indexOf(c)), reason: reasons[c] || null, ...(g.arch?.[c] || {}) })),
   });
   save();
   for (const p of g.players) if (p.uid && userFour.get(p.uid) === g.id) userFour.delete(p.uid);
@@ -916,8 +973,46 @@ async function chatStore(key, msgs) {
 const friendInfo = (me, f) => ({ ...pub(f), online: online.has(f.id), unread: social(me).unread[f.id] || 0 });
 function socialSummary(u) {
   social(u);
-  return { unread: Object.values(u.unread).reduce((a, b) => a + b, 0), requests: u.freqIn.length };
+  const gun = Object.entries(u.gunread || {}).filter(([gid]) => db.groups?.[gid]?.members.includes(u.id)).reduce((a, [, n]) => a + n, 0);
+  return { unread: Object.values(u.unread).reduce((a, b) => a + b, 0) + gun, requests: u.freqIn.length };
 }
+
+// ---------------------------------------------------------------- Gruppen (Gruppenchat mit mehreren Freunden)
+const MAX_GROUP = 12, MAX_GROUPS = 20;
+async function groupSave(gr) {
+  db.groups[gr.id] = gr;
+  if (mongoGroups) await mongoGroups.replaceOne({ id: gr.id }, { ...gr }, { upsert: true }).catch((e) => console.error('Gruppe speichern:', e.message));
+  else save();
+}
+async function groupDelete(id) {
+  delete db.groups[id];
+  if (mongoGroups) await mongoGroups.deleteOne({ id }).catch(() => {});
+  else { delete db.chats?.['g:' + id]; save(); }
+  if (mongoChats) await mongoChats.deleteOne({ id: 'g:' + id }).catch(() => {});
+  chatCache.delete('g:' + id);
+}
+const myGroups = (u) => Object.values(db.groups || {}).filter((gr) => gr.members.includes(u.id));
+const groupInfo = (u, gr) => ({
+  id: gr.id, name: gr.name, owner: gr.owner, createdAt: gr.createdAt, last: gr.last || null,
+  members: gr.members.map((id) => db.users[id]).filter(Boolean).map((m) => ({ ...pub(m), online: online.has(m.id) })),
+  unread: (u.gunread || {})[gr.id] || 0,
+});
+// Nachricht in die Gruppe (auch System-Nachrichten und Spiel-Einladungen)
+async function groupPost(gr, msg, exceptId = null) {
+  const key = 'g:' + gr.id;
+  const msgs = [...await chatLoad(key), msg].slice(-CHAT_KEEP);
+  await chatStore(key, msgs);
+  gr.last = { at: msg.at, text: msg.text, name: msg.name || null };
+  await groupSave(gr);
+  for (const id of gr.members) {
+    if (id === exceptId) continue;
+    const m = db.users[id]; if (!m) continue;
+    (m.gunread ||= {})[gr.id] = (m.gunread[gr.id] || 0) + 1;
+    emitTo(id, 'group:msg', { group: { id: gr.id, name: gr.name }, msg, ...socialSummary(m) });
+  }
+  save();
+}
+const groupUpdate = (gr, extra = {}) => { for (const id of gr.members) emitTo(id, 'group:update', { id: gr.id, ...extra }); };
 // Freunde informieren, wenn jemand online/offline geht
 function notifyFriends(u, isOnline) {
   for (const id of social(u).friends) emitTo(id, 'friend:status', { id: u.id, online: isOnline });
@@ -941,6 +1036,8 @@ function makeFriends(a, b) {
 // ---------------------------------------------------------------- Sockets
 const clean = (s, n) => String(s ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, n);
 const ALLOWED_TIMES = [0, 60_000, 180_000, 300_000, 600_000, 900_000];
+const pickTime = (t, fallback = 600_000) => (ALLOWED_TIMES.includes(t) ? t : fallback);
+const RANDOM_TIMES = [60_000, 180_000, 300_000, 600_000, 900_000]; // Zufallsmatch: immer mit Uhr
 
 io.on('connection', (socket) => {
   let user = null;
@@ -953,7 +1050,7 @@ io.on('connection', (socket) => {
     let u = null;
     try { u = await userByToken(token); if (u) { await refreshFromDb(u); await adoptGameFor(u.id); } } catch (e) { console.error('auth:', e.message); }
     if (!socket.connected) return;
-    user = u || createUser();
+    user = ensureShape(u || createUser());
     const old = online.get(user.id);
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
@@ -1324,13 +1421,16 @@ io.on('connection', (socket) => {
   });
 
   // --- 4er-Schach
-  socket.on('four:create', need(({ timeMs = 300_000 } = {}, ack) => {
-    if (banErr(user)) return ack?.({ error: banErr(user) });
-    if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
-    let code; do code = digits(6); while (rooms.has(code) || lobbies4.has(code));
-    const l = { code, hostId: user.id, seats: [user.id], timeMs: ALLOWED_TIMES.includes(timeMs) && timeMs ? timeMs : 300_000 };
-    lobbies4.set(code, l);
-    ack?.({ lobby: lobbyPayload(l) });
+  socket.on('four:create', need(({ timeMs = 300_000, teams = false } = {}, ack) => {
+    ack?.(createFourLobby(user, timeMs, teams));
+  }));
+  // 2 vs 2: Team wechseln (wenn dort noch Platz ist)
+  socket.on('four:team', need((_, ack) => {
+    const l = [...lobbies4.values()].find((x) => x.seats.includes(user.id));
+    if (!l?.teams) return ack?.({ error: 'Keine 2-vs-2-Lobby.' });
+    const to = 1 - (l.side[user.id] ?? 0);
+    if (l.seats.filter((id) => l.side[id] === to).length >= 2) return ack?.({ error: 'Das andere Team ist schon voll.' });
+    l.side[user.id] = to; emitLobby(l); ack?.({ ok: true });
   }));
   socket.on('four:start', need((_, ack) => {
     const l = [...lobbies4.values()].find((x) => x.hostId === user.id);
@@ -1338,13 +1438,13 @@ io.on('connection', (socket) => {
     lobbies4.delete(l.code);
     const humans = l.seats.filter((id) => online.has(id));
     for (const id of l.seats) if (id !== user.id) emitTo(id, 'four:lobby', { closed: true, started: true });
-    startFour(humans, l.timeMs);
+    startFour(humans, l.timeMs, { teams: l.teams, side: l.side });
     ack?.({ ok: true });
   }));
-  socket.on('four:solo', need(({ timeMs = 300_000 } = {}, ack) => {
+  socket.on('four:solo', need(({ timeMs = 300_000, teams = false } = {}, ack) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel oder einer Lobby.' });
-    startFour([user.id], ALLOWED_TIMES.includes(timeMs) && timeMs ? timeMs : 300_000);
+    startFour([user.id], fourTime(timeMs), { teams: !!teams, side: { [user.id]: 0 } });
     ack?.({ ok: true });
   }));
   socket.on('four:leave', need(() => {
@@ -1369,7 +1469,7 @@ io.on('connection', (socket) => {
 
   socket.on('room:cancel', need(() => { for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c); }));
 
-  socket.on('code:join', need(({ code } = {}, ack) => {
+  socket.on('code:join', need(({ code, timeMs } = {}, ack) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     code = String(code || '').replace(/\D/g, '');
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
@@ -1378,9 +1478,10 @@ io.on('connection', (socket) => {
       if (lob.seats.includes(user.id)) return ack?.({ error: 'Du bist schon in dieser Lobby.' });
       if (fourBusy(user.id)) return ack?.({ error: 'Du bist schon in einem 4er-Spiel oder einer Lobby.' });
       if (lob.seats.length >= 4) return ack?.({ error: 'Die 4er-Lobby ist schon voll.' });
+      if (lob.teams) lob.side[user.id] = lobbySide(lob);
       lob.seats.push(user.id);
-      ack?.({ four: true });
-      if (lob.seats.length === 4) { lobbies4.delete(code); for (const id of lob.seats) emitTo(id, 'four:lobby', { closed: true, started: true }); startFour(lob.seats, lob.timeMs); }
+      ack?.({ four: true, teams: !!lob.teams });
+      if (lob.seats.length === 4) { lobbies4.delete(code); for (const id of lob.seats) emitTo(id, 'four:lobby', { closed: true, started: true }); startFour(lob.seats, lob.timeMs, { teams: lob.teams, side: lob.side }); }
       else emitLobby(lob);
       return;
     }
@@ -1398,9 +1499,10 @@ io.on('connection', (socket) => {
       if (!online.has(target.id)) return ack?.({ error: `${target.name} ist gerade offline.` });
       if (userGame.has(target.id)) return ack?.({ error: `${target.name} spielt gerade.` });
       const id = crypto.randomUUID();
-      challenges.set(id, { fromId: user.id, toId: target.id, timeMs: 600_000 });
+      const t = pickTime(timeMs);
+      challenges.set(id, { fromId: user.id, toId: target.id, timeMs: t });
       setTimeout(() => challenges.delete(id), 60_000);
-      emitTo(target.id, 'challenge:incoming', { id, from: pub(user) });
+      emitTo(target.id, 'challenge:incoming', { id, from: pub(user), timeMs: t });
       return ack?.({ challenged: target.name });
     }
     ack?.({ error: 'Kein Spiel oder Spieler mit diesem Code gefunden.' });
@@ -1503,8 +1605,115 @@ io.on('connection', (socket) => {
       ack?.({ msg: m });
     } catch (e) { console.error(e); ack?.({ error: 'Nachricht konnte nicht gesendet werden.' }); }
   }));
+  // --- Replays: eigene Partien aus dem Archiv
+  socket.on('replays:list', need(async ({ before = null, type = null } = {}, ack) => {
+    try {
+      const list = await matchList({ uids: [user.id], before: typeof before === 'number' ? before : null, type: ['online', 'four', 'bot'].includes(type) ? type : null, limit: 30 });
+      ack?.({ list });
+    } catch (e) { console.error(e); ack?.({ error: 'Replays konnten nicht geladen werden.' }); }
+  }));
+  socket.on('replay:get', need(async ({ id } = {}, ack) => {
+    try {
+      const m = await matchGet(String(id || ''));
+      if (!m || (!m.uids?.includes(user.id) && !isAdmin(user))) return ack?.({ error: 'Diese Partie gibt es nicht (mehr).' });
+      ack?.({ match: m });
+    } catch (e) { console.error(e); ack?.({ error: 'Replay konnte nicht geladen werden.' }); }
+  }));
+
+  // --- Gruppen
+  const groupOf = (id) => { const gr = db.groups?.[String(id || '')]; return gr && gr.members.includes(user.id) ? gr : null; };
+  const groupName = (n) => clean(n, 24).replace(/\s+/g, ' ');
+  socket.on('groups:list', need((_, ack) => {
+    ack?.({ groups: myGroups(user).map((gr) => groupInfo(user, gr)).sort((a, b) => (b.last?.at || b.createdAt) - (a.last?.at || a.createdAt)) });
+  }));
+  socket.on('group:create', need(async ({ name, members = [] } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
+    const n = groupName(name);
+    if (n.length < 2) return ack?.({ error: 'Gib der Gruppe einen Namen (mind. 2 Zeichen).' });
+    if (badChat(n) || badWord(n)) return ack?.({ error: 'Der Gruppenname enthält ein unerlaubtes Wort.' });
+    if (myGroups(user).length >= MAX_GROUPS) return ack?.({ error: `Du bist schon in ${MAX_GROUPS} Gruppen.` });
+    const ids = [...new Set((Array.isArray(members) ? members : []).map(String))].filter((id) => social(user).friends.includes(id) && db.users[id]);
+    if (!ids.length) return ack?.({ error: 'Wähle mindestens einen Freund aus.' });
+    if (ids.length + 1 > MAX_GROUP) return ack?.({ error: `Höchstens ${MAX_GROUP} Mitglieder pro Gruppe.` });
+    const gr = { id: crypto.randomUUID(), name: n, owner: user.id, members: [user.id, ...ids], createdAt: Date.now() };
+    await groupSave(gr);
+    await groupPost(gr, { sys: true, text: `${user.name} hat die Gruppe „${n}“ erstellt.`, at: Date.now() }, user.id);
+    for (const id of ids) emitTo(id, 'group:added', { group: { id: gr.id, name: gr.name }, by: pub(user) });
+    ack?.({ group: groupInfo(user, gr) });
+  }));
+  socket.on('group:history', need(async ({ id } = {}, ack) => {
+    const gr = groupOf(id);
+    if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    try {
+      const msgs = await chatLoad('g:' + gr.id);
+      if (user.gunread?.[gr.id]) { delete user.gunread[gr.id]; save(); }
+      ack?.({ group: groupInfo(user, gr), msgs: msgs.slice(-100), ...socialSummary(user) });
+    } catch (e) { console.error(e); ack?.({ error: 'Gruppe konnte nicht geladen werden.' }); }
+  }));
+  socket.on('group:read', need(({ id } = {}) => { if (user.gunread?.[id]) { delete user.gunread[id]; save(); } }));
+  socket.on('group:send', need(async ({ id, text } = {}, ack) => {
+    if (banErr(user)) return ack?.({ error: banErr(user) });
+    const gr = groupOf(id);
+    if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    const msg = String(text ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, CHAT_LEN);
+    if (!msg) return ack?.({ error: 'Leere Nachricht.' });
+    if (badChat(msg)) return ack?.({ error: 'Deine Nachricht enthält ein unerlaubtes Wort.' });
+    const now = Date.now();
+    while (sent.length && now - sent[0] > 10_000) sent.shift();
+    if (sent.length >= 8) return ack?.({ error: 'Nicht so schnell – warte kurz.' });
+    sent.push(now);
+    const m = { from: user.id, name: user.name, text: msg, at: now };
+    try { await groupPost(gr, m, user.id); ack?.({ msg: m }); }
+    catch (e) { console.error(e); ack?.({ error: 'Nachricht konnte nicht gesendet werden.' }); }
+  }));
+  socket.on('group:add', need(async ({ id, members = [] } = {}, ack) => {
+    const gr = groupOf(id);
+    if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    const ids = [...new Set((Array.isArray(members) ? members : []).map(String))].filter((x) => social(user).friends.includes(x) && db.users[x] && !gr.members.includes(x));
+    if (!ids.length) return ack?.({ error: 'Wähle mindestens einen Freund aus, der noch nicht dabei ist.' });
+    if (gr.members.length + ids.length > MAX_GROUP) return ack?.({ error: `Höchstens ${MAX_GROUP} Mitglieder pro Gruppe.` });
+    gr.members.push(...ids);
+    await groupPost(gr, { sys: true, text: `${user.name} hat ${ids.map((x) => db.users[x].name).join(', ')} hinzugefügt.`, at: Date.now() }, user.id);
+    for (const x of ids) emitTo(x, 'group:added', { group: { id: gr.id, name: gr.name }, by: pub(user) });
+    groupUpdate(gr);
+    ack?.({ group: groupInfo(user, gr) });
+  }));
+  socket.on('group:rename', need(async ({ id, name } = {}, ack) => {
+    const gr = groupOf(id);
+    if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    const n = groupName(name);
+    if (n.length < 2) return ack?.({ error: 'Der Name braucht mindestens 2 Zeichen.' });
+    if (badChat(n) || badWord(n)) return ack?.({ error: 'Der Gruppenname enthält ein unerlaubtes Wort.' });
+    gr.name = n;
+    await groupPost(gr, { sys: true, text: `${user.name} hat die Gruppe in „${n}“ umbenannt.`, at: Date.now() }, user.id);
+    groupUpdate(gr);
+    ack?.({ group: groupInfo(user, gr) });
+  }));
+  socket.on('group:leave', need(async ({ id } = {}, ack) => {
+    const gr = groupOf(id);
+    if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    gr.members = gr.members.filter((x) => x !== user.id);
+    if (user.gunread) delete user.gunread[gr.id];
+    if (!gr.members.length) { await groupDelete(gr.id); save(); return ack?.({ ok: true }); }
+    if (gr.owner === user.id) gr.owner = gr.members[0];
+    await groupPost(gr, { sys: true, text: `${user.name} hat die Gruppe verlassen.`, at: Date.now() });
+    groupUpdate(gr);
+    ack?.({ ok: true });
+  }));
+  // Aus der Gruppe heraus eine 2-vs-2- oder 4er-Lobby öffnen und alle einladen
+  socket.on('group:play', need(async ({ id, teams = true, timeMs = 300_000 } = {}, ack) => {
+    const gr = groupOf(id);
+    if (!gr) return ack?.({ error: 'Du bist nicht in dieser Gruppe.' });
+    const r = createFourLobby(user, timeMs, teams);
+    if (r.error) return ack?.(r);
+    const mode = teams ? '2 vs 2' : '4er-Schach';
+    const m = { from: user.id, name: user.name, text: `⚔️ ${mode}: Wer spielt mit? Code ${r.lobby.code}`, at: Date.now(), invite: { code: r.lobby.code, teams: !!teams, timeMs: r.lobby.timeMs } };
+    await groupPost(gr, m, user.id);
+    ack?.({ ...r, msg: m });
+  }));
+
   // Freund direkt zu einer Partie herausfordern
-  socket.on('friend:challenge', need(({ id } = {}, ack) => {
+  socket.on('friend:challenge', need(({ id, timeMs } = {}, ack) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     const t = db.users[id];
     if (!t || !social(user).friends.includes(id)) return ack?.({ error: 'Nur Freunde kannst du so herausfordern.' });
@@ -1512,9 +1721,10 @@ io.on('connection', (socket) => {
     if (!online.has(t.id)) return ack?.({ error: `${t.name} ist gerade offline.` });
     if (userGame.has(t.id) || fourBusy(t.id)) return ack?.({ error: `${t.name} spielt gerade.` });
     const cid = crypto.randomUUID();
-    challenges.set(cid, { fromId: user.id, toId: t.id, timeMs: 600_000 });
+    const tm = pickTime(timeMs);
+    challenges.set(cid, { fromId: user.id, toId: t.id, timeMs: tm });
     setTimeout(() => challenges.delete(cid), 60_000);
-    emitTo(t.id, 'challenge:incoming', { id: cid, from: pub(user) });
+    emitTo(t.id, 'challenge:incoming', { id: cid, from: pub(user), timeMs: tm });
     ack?.({ ok: true });
   }));
 
@@ -1528,18 +1738,20 @@ io.on('connection', (socket) => {
   }));
 
   // --- Zufälliges Match
-  socket.on('queue:join', need((_, ack) => {
+  socket.on('queue:join', need(({ timeMs } = {}, ack) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
+    const t = RANDOM_TIMES.includes(timeMs) ? timeMs : 600_000;
     queue = queue.filter((q) => q.userId !== user.id && online.has(q.userId));
-    // Gegner mit möglichst ähnlicher Wertung
+    // Gegner mit derselben Bedenkzeit und möglichst ähnlicher Wertung
     let best = null;
     for (const q of queue) {
+      if ((q.timeMs || 600_000) !== t) continue;
       const diff = Math.abs(db.users[q.userId].rating - user.rating);
       if (!best || diff < best.diff) best = { q, diff };
     }
-    if (best) { ack?.({ ok: true, matched: true }); startMatch(best.q.userId, user.id, 600_000, 'random'); return; }
-    queue.push({ userId: user.id, since: Date.now() });
+    if (best) { ack?.({ ok: true, matched: true }); startMatch(best.q.userId, user.id, t, 'random'); return; }
+    queue.push({ userId: user.id, since: Date.now(), timeMs: t });
     ack?.({ ok: true });
     broadcastStats();
   }));
@@ -1617,6 +1829,7 @@ io.on('connection', (socket) => {
     else if (c.isDraw() || c.isStalemate()) { outcome = 'draw'; reason = 'draw'; }
     else if (resigned) { outcome = 'loss'; reason = 'resign'; }
     else return ack?.({ error: 'Partie nicht beendet.' });
+    const matchId = crypto.randomUUID();
     let coins = 0;
     if (outcome === 'win') coins = bot.reward;
     else if (outcome === 'draw') coins = Math.round(bot.reward / 3);
@@ -1626,16 +1839,16 @@ io.on('connection', (socket) => {
     user.stats.botGames++;
     if (outcome === 'win') { user.stats.botWins++; user.stats.mates++; }
     ensureVs(user);
-    const hEntry = { type: 'bot', opponent: bot.name, oppAvatar: { type: 'emoji', value: bot.avatar, color: bot.color }, outcome, reason, coins, rating: 0, moves: moves.length, at: now };
+    const hEntry = { type: 'bot', matchId, opponent: bot.name, oppAvatar: { type: 'emoji', value: bot.avatar, color: bot.color }, outcome, reason, coins, rating: 0, moves: moves.length, at: now };
     addVs(user, hEntry);
     user.history.unshift(hEntry);
     user.history = user.history.slice(0, 50);
     save();
     archiveMatch({
-      id: crypto.randomUUID(), type: 'bot', at: now, uids: [user.id], moves: moves.map((m) => ({ from: m.from, to: m.to, promotion: m.promotion })),
+      id: matchId, type: 'bot', at: now, uids: [user.id], moves: moves.map((m) => ({ from: m.from, to: m.to, promotion: m.promotion })),
       result: outcome, reason, plies: moves.length, players: { user: { id: user.id, name: user.name, color, coins, outcome }, bot: { id: bot.id, name: bot.name, avatar: bot.avatar } },
     });
-    ack?.({ coins, outcome, profile: priv(user) });
+    ack?.({ coins, outcome, profile: priv(user), matchId });
   }));
 
   socket.on('leaderboard', (_, ack) => {

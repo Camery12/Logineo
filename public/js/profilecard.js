@@ -1,5 +1,5 @@
 // Cinematic-Profilkarte: Banner, Rahmen, Namenseffekt, Partikel, Bio, Spielzeit, Vitrine, Inventar, Profilsong
-import { findItem, PROFILE_OPTIONS, MUSIC_MAX_VOLUME, DEFAULT_CUSTOM } from './catalog.js';
+import { findItem, PROFILE_OPTIONS, MUSIC_MAX_VOLUME, DEFAULT_CUSTOM, pieceLook } from './catalog.js';
 import { pieceURL } from './pieces.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -63,7 +63,7 @@ export function profileCardHTML(u, { own = false } = {}) {
     ${show ? `<div class="pc-sec pc-showcase"><span class="sc-icon">${show.icon}</span><div><span class="muted small">🏆 Lieblings-Finisher</span><b>${esc(show.name)}</b><p class="muted small">${esc(show.desc)}</p></div></div>` : ''}
     <div class="pc-sec"><h4>🎨 Ausgerüstet</h4><div class="pc-inv">
       <span class="inv-chip"><i class="sw" style="background:linear-gradient(135deg, ${findItem('board', u.equipped?.board)?.light} 50%, ${findItem('board', u.equipped?.board)?.dark} 50%)"></i>${esc(findItem('board', u.equipped?.board)?.name || '')}</span>
-      <span class="inv-chip"><i class="sw pc-piece" style="background-image:${pieceURL('k', 'w', u.equipped?.pieces || 'klassisch').replace(/"/g, '&quot;')}"></i>${esc(findItem('pieces', u.equipped?.pieces)?.name || '')}</span>
+      <span class="inv-chip"><i class="sw pc-piece" style="background-image:${pieceURL('k', 'w', pieceLook(u.equipped)).replace(/"/g, '&quot;')}"></i>${esc(findItem('pieces', u.equipped?.pieces)?.name || '')}</span>
       <span class="inv-chip"><i class="sw ic">${findItem('finisher', u.equipped?.finisher)?.icon || '♚'}</i>${esc(findItem('finisher', u.equipped?.finisher)?.name || '')}</span>
     </div></div>
     ${invHTML}

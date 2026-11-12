@@ -51,7 +51,7 @@ export function createSocket() {
       avatar: { type: 'emoji', value: pick(AVATAR_EMOJIS), color: pick(AVATAR_COLORS) },
       coins: REWARDS.start, rating: 1200,
       stats: { games: 0, wins: 0, losses: 0, draws: 0, botWins: 0, botGames: 0, mates: 0 },
-      owned: { board: ['klassisch'], pieces: ['klassisch'], finisher: ['klassisch'] },
+      owned: { board: ['klassisch'], pieces: ['klassisch'], finisher: ['klassisch'], shape: ['klassisch'] },
       equipped: { board: 'klassisch', pieces: 'klassisch', finisher: 'klassisch' },
       history: [], createdAt: Date.now(),
     };
@@ -118,6 +118,7 @@ export function createSocket() {
       if (s?.exists) remote = s.data();
     }
     profile = clone(remote || LS.get('sa-profile-' + uid) || newUser());
+    profile.owned.shape ||= ['klassisch']; profile.equipped.shape ||= 'klassisch'; // Formen (seit 1.15)
     const base = newUser();
     for (const k of Object.keys(base)) if (profile[k] === undefined) profile[k] = base[k];
     profile.id = uid; profile.code = stableDigits(uid, 8);

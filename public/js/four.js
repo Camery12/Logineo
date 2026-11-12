@@ -2,6 +2,8 @@
 // Brett 14×14 ohne die 3×3-Ecken. Reihenfolge: Rot (unten) → Blau (links) → Gelb (oben) → Grün (rechts).
 // Wer matt oder patt ist (oder aufgibt / zu lange weg ist / keine Zeit mehr hat), scheidet aus;
 // seine Figuren werden grau und bleiben als Hindernisse stehen (man kann sie schlagen). Der letzte Spieler gewinnt.
+// 2 vs 2 (teams): Rot + Gelb gegen Blau + Grün. Partner können sich nicht schlagen und nicht Schach geben.
+// Sobald ein Spieler ausscheidet, hat sein Team verloren.
 // Vereinfachungen: keine Rochade, kein En passant, Könige können nicht geschlagen werden,
 // Bauern werden auf der 8. Reihe (Brettmitte) automatisch zur Dame.
 
@@ -19,7 +21,11 @@ const DIAG = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
 const ORTH = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 export const VALUE = { p: 1, n: 3, b: 3.2, r: 5, q: 9, k: 0 };
 
-export function newState() {
+export const TEAM_NAMES = ['Rot & Gelb', 'Blau & Grün'];
+export const teamOf = (c) => c % 2;
+export const allied = (state, a, b) => a === b || (!!state.teams && a % 2 === b % 2);
+
+export function newState({ teams = false } = {}) {
   const board = new Array(N * N).fill(null);
   const put = (r, c, t, col) => { board[r * N + c] = { t, c: col }; };
   const red = ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'];
@@ -32,7 +38,7 @@ export function newState() {
     put(10 - i, 0, blue[i], 1); put(10 - i, 1, 'p', 1);
     put(10 - i, 13, green[i], 3); put(10 - i, 12, 'p', 3);
   }
-  return { board, turn: 0, alive: [true, true, true, true], out: [], ply: 0, last: null };
+  return { board, turn: 0, alive: [true, true, true, true], out: [], ply: 0, last: null, teams: !!teams };
 }
 
 const at = (board, r, c) => (valid(r, c) ? board[r * N + c] : undefined);
@@ -68,17 +74,19 @@ export function kingSquare(board, color) {
 export function inCheck(state, color) {
   const k = kingSquare(state.board, color);
   if (k < 0) return false;
-  for (let o = 0; o < 4; o++) if (o !== color && state.alive[o] && attackedBy(state.board, k, o)) return true;
+  for (let o = 0; o < 4; o++) if (!allied(state, o, color) && state.alive[o] && attackedBy(state.board, k, o)) return true;
   return false;
 }
 
-function pseudo(board, color) {
+function pseudo(state, color) {
+  const board = state.board;
   const out = [];
+  const enemy = (q) => q.dead || !allied(state, q.c, color);
   const target = (from, r, c) => {
     if (!valid(r, c)) return 'stop';
     const q = board[r * N + c];
     if (!q) { out.push({ from, to: r * N + c }); return 'go'; }
-    if ((q.c !== color || q.dead) && q.t !== 'k') out.push({ from, to: r * N + c });
+    if (enemy(q) && q.t !== 'k') out.push({ from, to: r * N + c });
     return 'stop';
   };
   for (let i = 0; i < N * N; i++) {
@@ -96,7 +104,7 @@ function pseudo(board, color) {
       const perp = dr === 0 ? [[-1, 0], [1, 0]] : [[0, -1], [0, 1]];
       for (const [a, b] of perp) {
         const q = at(board, r1 + a, c1 + b);
-        if (q && (q.c !== color || q.dead) && q.t !== 'k') out.push({ from: i, to: (r1 + a) * N + (c1 + b) });
+        if (q && enemy(q) && q.t !== 'k') out.push({ from: i, to: (r1 + a) * N + (c1 + b) });
       }
     } else if (p.t === 'n') {
       for (const [a, b] of KN) target(i, r + a, c + b);
@@ -129,7 +137,7 @@ export function unmake(state, u) {
 export function legalMoves(state, color) {
   if (!state.alive[color]) return [];
   const res = [];
-  for (const m of pseudo(state.board, color)) {
+  for (const m of pseudo(state, color)) {
     const u = make(state, m);
     if (!inCheck(state, color)) res.push(m);
     unmake(state, u);
@@ -152,8 +160,12 @@ export function eliminate(state, color, reason) {
 }
 
 // Nach einem Zug/Ausscheiden: nächsten Spieler finden; wer nicht ziehen kann, scheidet aus
+// Ende: im 2 vs 2 sobald einer raus ist, sonst wenn nur noch einer übrig ist
+export const finished = (state) => (state.teams ? state.alive.some((a) => !a) : aliveCount(state) <= 1);
+export const winningTeam = (state) => (!state.teams ? -1 : state.alive[0] && state.alive[2] ? 0 : state.alive[1] && state.alive[3] ? 1 : -1);
+
 export function settle(state, events = []) {
-  while (aliveCount(state) > 1) {
+  while (!finished(state)) {
     const c = state.turn;
     if (!state.alive[c]) { state.turn = nextColor(state, c); continue; }
     if (legalMoves(state, c).length) break;
@@ -162,7 +174,7 @@ export function settle(state, events = []) {
     events.push({ type: 'out', color: c, reason: mate ? 'checkmate' : 'stalemate' });
     state.turn = nextColor(state, c);
   }
-  if (aliveCount(state) <= 1) state.over = true;
+  if (finished(state)) { state.over = true; if (state.teams) state.winTeam = winningTeam(state); }
   return events;
 }
 
@@ -179,6 +191,7 @@ export function play(state, color, from, to) {
   if (cap) events.push({ type: 'capture', piece: cap.t, color: cap.c, dead: !!cap.dead });
   if (m.promo) events.push({ type: 'promo' });
   for (let o = 0; o < 4; o++) if (o !== color && state.alive[o] && inCheck(state, o)) events.push({ type: 'check', color: o });
+  if (state.teams && finished(state)) { state.over = true; state.winTeam = winningTeam(state); return { move: m, events }; }
   state.turn = nextColor(state, color);
   settle(state, events);
   return { move: m, events };
@@ -189,7 +202,7 @@ export function botMove(state, color) {
   const moves = legalMoves(state, color);
   if (!moves.length) return null;
   const b = state.board;
-  const opps = [0, 1, 2, 3].filter((o) => o !== color && state.alive[o]);
+  const opps = [0, 1, 2, 3].filter((o) => !allied(state, o, color) && state.alive[o]);
   let best = moves[0], bestS = -Infinity;
   for (const m of moves) {
     const piece = b[m.from], cap = b[m.to];

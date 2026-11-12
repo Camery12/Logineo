@@ -18,6 +18,7 @@ export function applyBoardTheme(el, id) {
   el.style.setProperty('--frost', 'none');
   el.classList.toggle('stars', !!t.stars);
   el.classList.toggle('frosty', !!t.frost);
+  el.classList.toggle('b3d', !!t.view3d);
   el.dataset.theme = t.id;
   // Texturen werden im Hintergrund erzeugt und dann eingesetzt
   boardTextures(t.id, (res) => {
@@ -180,6 +181,10 @@ export class Board {
   }
 
   _pointSq(e) {
+    if (this.el.classList.contains('b3d')) {
+      const hit = document.elementsFromPoint(e.clientX, e.clientY).find((n) => n.classList?.contains('sq') && this.el.contains(n));
+      return hit?.dataset.sq || null;
+    }
     const r = this.el.getBoundingClientRect();
     return this._sqAt(Math.floor((e.clientX - r.left) / (r.width / 8)), Math.floor((e.clientY - r.top) / (r.height / 8)));
   }
@@ -202,7 +207,7 @@ export class Board {
       this.selected = sq;
       this._highlights();
       const p = this.pieceEls.get(sq);
-      if (p) {
+      if (p && !this.el.classList.contains('b3d')) { // 3D-Brett: antippen statt ziehen
         const r = this.el.getBoundingClientRect();
         this.drag = { sq, el: p.el, r, moved: false, sx: e.clientX, sy: e.clientY };
         p.el.classList.add('dragging', 'no-anim');

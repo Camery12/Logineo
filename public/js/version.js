@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.14.0';
-export const VERSION_DATE = '2026-11-11';
+export const VERSION = '1.15.0';
+export const VERSION_DATE = '2026-11-12';
 export const CHANGELOG = [
+  ['1.15.0', '2 vs 2 (Rot & Gelb gegen Blau & Grün), Replays-Tab für deine Partien, Gruppen im Freunde-Tab (Gruppenchat + gemeinsam spielen), Bedenkzeit beim Zufallsmatch und bei Herausforderungen wählbar, deine Figuren immer in deinem eigenen Skin, neuer Shop-Tab „Formen“ und das 3D-Brett für 3.000 Münzen'],
   ['1.14.0', 'Neue Figuren: 3D-Figuren für 3.500 Münzen – echte 3D-Modelle aus Elfenbein und Klavierlack'],
   ['1.13.1', 'Warte-Anzeige mitten auf dem Brett bei Verbindungsproblemen, automatischer Abgleich mit dem Server, nach 3 Minuten ohne Verbindung automatisch aufgegeben'],
   ['1.13.0', 'Admin-Panel: Übersicht, Archiv aller Partien mit Replay, Partien annullieren, Spieler sperren, Ankündigungen an alle, alle Live-Partien zuschauen'],

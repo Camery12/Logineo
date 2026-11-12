@@ -88,6 +88,7 @@ function makePiece(type, material) {
 }
 
 function skinMaterial(skinId, color) {
+  skinId = String(skinId || '').split('@')[0]; // Form ist für 3D egal
   const s = PIECES.find((p) => p.id === skinId) || PIECES[0];
   const c = new THREE.Color().setStyle(s[color].fill[0]).lerp(new THREE.Color().setStyle(s[color].fill[1]), color === 'b' ? 0.8 : 0.5);
   // Lackiert: Klarlack-Schicht spiegelt die Umgebung, wirkt wie echte Turnierfiguren

@@ -47,6 +47,9 @@ export const BOARDS = [
     tex: { light: { kind: 'rift', base: '#4d3d80', accent: '#7af7ff', accent2: '#ff4fd8', deep: '#1c1436' }, dark: { kind: 'rift', base: '#170d2c', accent: '#ff4fd8', accent2: '#7af7ff', deep: '#020104' } } },
   { id: 'royal', name: 'Königsgold', price: 2000, light: '#fff4d6', dark: '#c9a227', frame: '#3a2a00', last: 'rgba(255, 255, 255, .5)', desc: 'Nur für wahre Könige.',
     tex: { light: { kind: 'marble', base: '#fff4d6', accent: '#ecd9a8' }, dark: { kind: 'brushed', base: '#c9a227', accent: '#f2d675' } } },
+  // 3D-Brett: das Brett wird schräg im Raum gezeigt, die Figuren stehen aufrecht darauf
+  { id: 'brett3d', name: '3D-Brett', price: 3000, view3d: true, light: '#ecd2a4', dark: '#8a5a32', frame: '#2a160a', last: 'rgba(255, 213, 79, .55)', desc: 'Das Brett steht schräg im Raum – mit dicker Holzplatte, Schatten und aufrecht stehenden Figuren. Echtes 3D-Gefühl beim Spielen.',
+    tex: { light: { kind: 'wood', base: '#ecd2a4', accent: '#d6b47f' }, dark: { kind: 'wood', base: '#8a5a32', accent: '#6b4224' } } },
 ];
 
 // Figuren-Skins: Füllverlauf, Kontur, Details, optional Marmor-Wirbel (swirl) + 3D-Materialwerte
@@ -122,6 +125,15 @@ export const PIECES = [
     mat: { metal: 0.2, rough: 0.3, emissive: 0.9 } },
 ];
 
+// Figuren-Formen: andere Silhouetten, die Farben kommen weiter vom Figuren-Skin
+export const SHAPES = [
+  { id: 'klassisch', name: 'Klassisch', price: 0, icon: '♞', desc: 'Die bekannten Staunton-Figuren.' },
+  { id: 'abzeichen', name: 'Spielsteine', price: 500, icon: '🪙', desc: 'Runde Spielsteine mit Buchstaben (K, D, T, L, S, B) – super übersichtlich.' },
+  { id: 'modern', name: 'Modern', price: 800, icon: '🔷', desc: 'Klare geometrische Formen: Kreise, Dreiecke und Sterne.' },
+  { id: 'kawaii', name: 'Kawaii', price: 1200, icon: '🥰', desc: 'Süße Figuren mit Kulleraugen und roten Bäckchen.' },
+  { id: 'pixel', name: 'Pixel', price: 1500, icon: '👾', desc: 'Figuren im 8-Bit-Retro-Look wie im alten Videospiel.' },
+];
+
 export const FINISHERS = [
   { id: 'klassisch', name: 'Königssturz', price: 0, icon: '♚', desc: 'Der König kippt in Zeitlupe um.' },
   { id: 'viertewand', name: 'Vierte Wand', price: 2500, icon: '🪟', ultra: true, desc: 'Der König kracht durch deinen Bildschirm – das Glas zerspringt und die ganze Website stürzt ein.' },
@@ -179,7 +191,10 @@ export const BOTS = [
 ];
 export const eloText = (b) => (b.elo === Infinity ? '∞' : String(b.elo));
 
-export const CATALOG = { board: BOARDS, pieces: PIECES, finisher: FINISHERS };
+export const CATALOG = { board: BOARDS, pieces: PIECES, finisher: FINISHERS, shape: SHAPES };
+// Aussehen der Figuren eines Spielers: Skin + Form (z. B. "gold@pixel"), klassische Form ohne Zusatz
+export const pieceLook = (eq) => (eq?.shape && eq.shape !== 'klassisch' ? `${eq.pieces || 'klassisch'}@${eq.shape}` : eq?.pieces || 'klassisch');
+export const splitLook = (look) => { const [skin, shape] = String(look || 'klassisch').split('@'); return { skin: skin || 'klassisch', shape: shape || 'klassisch' }; };
 export const findItem = (kind, id) => (CATALOG[kind] || []).find((x) => x.id === id);
 
 // Bundle-Preis: Summe der noch nicht gekauften Teile minus Rabatt (auf 10 gerundet)
