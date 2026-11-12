@@ -598,7 +598,7 @@ function animateNumber(el, from, to) {
 
 // ================================================================ Navigation
 function go(view) {
-  if (!['play', 'bots', 'shop', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin', 'replays'].includes(view)) view = 'play';
+  if (!['play', 'bots', 'shop', 'inventory', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin', 'replays'].includes(view)) view = 'play';
   if (view === 'admin' && !state.profile?.admin) view = 'play';
   if (view === 'game' && !state.game && !state.bot) view = 'play';
   if (view === 'four' && !state.four) view = 'play';
@@ -615,6 +615,7 @@ function go(view) {
   if (view === 'shop') renderShop();
   if (view === 'profile') renderProfile();
   if (view === 'friends') renderFriends();
+  if (view === 'inventory') renderInventory();
   if (view === 'admin') renderAdmin(state.adminTab || 'overview');
   if (view === 'leaderboard') renderLeaderboard();
   if (view === 'replays') renderReplays();
@@ -2286,9 +2287,8 @@ function renderShop() {
         <div class="shape-row dark">${['p', 'n', 'b', 'r', 'q', 'k'].map((t) => `<i style="background-image:${pieceURL(t, 'b', lk).replace(/"/g, '&quot;')}"></i>`).join('')}</div>`;
     }
     if (tab === 'finisher') {
-      const colors = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff', midas: '#ffc53d', ak: '#ff8a3a', feuersturm: '#ff4a1a', rakete: '#ff9a3a', ufo: '#7fff9a', supernova: '#cfe8ff', portal: '#9a7cff', krake: '#b46cff', bowling: '#5a3cff', schwerkraft: '#8ab4ff', shuriken: '#d7dde4', lawine: '#e8f4ff', viertewand: '#bfe9ff', riss: '#ff4fd8' };
       prev.style.padding = '0';
-      prev.innerHTML = `<div class="fin-prev" style="--fc:${colors[it.id]}"><span>${it.icon}</span><button class="btn sm">▶ Vorschau</button></div>`;
+      prev.innerHTML = `<div class="fin-prev" style="--fc:${FIN_COLORS[it.id] || '#7c5cff'}"><span>${it.icon}</span><button class="btn sm">▶ Vorschau</button></div>`;
       $('button', prev).onclick = () => previewFinisher(it.id);
     }
     const eq = $('[data-eq]', card);
@@ -2297,6 +2297,92 @@ function renderShop() {
     if (buy) buy.onclick = () => confirmBuy(tab, it);
     grid.appendChild(card);
   }
+}
+
+// ================================================================ Inventar
+const FIN_COLORS = { klassisch: '#f5c542', feuerwerk: '#ff3d6e', blitz: '#39b6ff', meteor: '#ff7a1a', kristall: '#9be7ff', loch: '#8a3dff', glitch: '#39ff7a', tornado: '#cbb89a', samurai: '#ff2d55', laser: '#38d9ff', kanone: '#ffb347', erdbeben: '#ff5a1a', hammer: '#7fd4ff', midas: '#ffc53d', ak: '#ff8a3a', feuersturm: '#ff4a1a', rakete: '#ff9a3a', ufo: '#7fff9a', supernova: '#cfe8ff', portal: '#9a7cff', krake: '#b46cff', bowling: '#5a3cff', schwerkraft: '#8ab4ff', shuriken: '#d7dde4', lawine: '#e8f4ff', viertewand: '#bfe9ff', riss: '#ff4fd8' };
+const INV_TABS = [['board', '🎨 Bretter', () => BOARDS], ['pieces', '♟️ Figuren', () => PIECES], ['shape', '🔷 Formen', () => SHAPES], ['finisher', '💥 Finisher', () => FINISHERS]];
+const ownedOf = (p, kind) => p.owned?.[kind] || ['klassisch'];
+const equippedOf = (p, kind) => p.equipped?.[kind] || 'klassisch';
+function renderInventory() {
+  const p = state.profile; if (!p) return;
+  const root = $('#view-inventory');
+  const tab = state.invTab || 'board';
+  const q = (state.invQuery || '').toLowerCase();
+  const all = INV_TABS.map(([k, , list]) => [k, list()]);
+  const ownedCount = all.reduce((s, [k, list]) => s + list.filter((it) => ownedOf(p, k).includes(it.id)).length, 0);
+  const totalCount = all.reduce((s, [, list]) => s + list.length, 0);
+  const worth = all.reduce((s, [k, list]) => s + list.filter((it) => ownedOf(p, k).includes(it.id)).reduce((a, it) => a + (it.price || 0), 0), 0);
+  const fin = findItem('finisher', equippedOf(p, 'finisher')) || FINISHERS[0];
+  const brd = findItem('board', equippedOf(p, 'board')) || BOARDS[0];
+  const pcs = findItem('pieces', equippedOf(p, 'pieces')) || PIECES[0];
+  const shp = SHAPES.find((s) => s.id === equippedOf(p, 'shape')) || SHAPES[0];
+  root.innerHTML = `<div class="section-title"><div><h2>🎒 Inventar</h2><p>Alles, was du freigeschaltet hast – mit einem Klick ausrüsten und kombinieren.</p></div>
+      <span class="pill coin-pill" style="font-size:16px;padding:10px 16px"><i class="coin" style="width:20px;height:20px"></i>${fmtNum(p.coins)}</span></div>
+    <div class="card inv-hero">
+      <div class="inv-look" id="inv-look"></div>
+      <div class="inv-info">
+        <h3>Dein Look</h3>
+        <div class="inv-equipped">
+          <span>🎨 <b>${esc(brd.name)}</b></span><span>♟️ <b>${esc(pcs.name)}</b></span><span>🔷 <b>${esc(shp.name)}</b></span><span>💥 <b>${fin.icon} ${esc(fin.name)}</b></span>
+        </div>
+        <div class="inv-stats">
+          <div><b>${ownedCount}</b><span>von ${totalCount} Teilen</span></div>
+          <div><b>${fmtNum(worth)}</b><span>Münzen Wert</span></div>
+          <div><b>${Math.round((ownedCount / totalCount) * 100)}%</b><span>Sammlung</span></div>
+        </div>
+        <div class="inv-progress"><i style="width:${(ownedCount / totalCount) * 100}%"></i></div>
+        <button class="btn sm" id="inv-fin-prev">▶ Meinen Finisher ansehen</button>
+      </div>
+    </div>
+    <div class="inv-bar">
+      <div class="tabs inv-tabs">${INV_TABS.map(([k, l, list]) => `<button data-itab="${k}" class="${k === tab ? 'on' : ''}">${l} <span class="inv-count">${list().filter((it) => ownedOf(p, k).includes(it.id)).length}/${list().length}</span></button>`).join('')}</div>
+      <input class="inv-search" id="inv-q" placeholder="🔎 Suchen…" value="${esc(state.invQuery || '')}" autocomplete="off">
+    </div>
+    <div class="shop-grid inv-grid" id="inv-grid"></div>
+    <div class="inv-locked" id="inv-locked"></div>`;
+  $('#inv-look').appendChild(miniBoard(brd.id, mySkins(), 'r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R'));
+  $('#inv-fin-prev').onclick = () => previewFinisher(fin.id);
+  $$('[data-itab]', root).forEach((b) => b.onclick = () => { state.invTab = b.dataset.itab; renderInventory(); });
+  let tm = 0;
+  $('#inv-q').oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { state.invQuery = e.target.value; renderInventory(); const i = $('#inv-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
+  const list = INV_TABS.find(([k]) => k === tab)[2]();
+  const mine = list.filter((it) => ownedOf(p, tab).includes(it.id) && (!q || it.name.toLowerCase().includes(q)))
+    .sort((a, b) => (equippedOf(p, tab) === b.id) - (equippedOf(p, tab) === a.id) || (b.price || 0) - (a.price || 0));
+  const grid = $('#inv-grid');
+  if (!mine.length) grid.innerHTML = `<p class="muted">${q ? 'Nichts gefunden.' : 'Hier ist noch nichts – schau im Shop vorbei!'}</p>`;
+  for (const it of mine) {
+    const on = equippedOf(p, tab) === it.id;
+    const card = html(`<div class="card shop-item inv-item ${on ? 'equipped' : ''}">
+      ${on ? '<span class="ribbon">Ausgerüstet</span>' : ''}
+      <div class="prev"></div>
+      <h4>${(tab === 'shape' || tab === 'finisher') && it.icon ? it.icon + ' ' : ''}${esc(it.name)}</h4><p>${esc(it.desc)}</p>
+      <div class="inv-actions">${on ? '<button class="btn sm" disabled>✓ Aktiv</button>' : '<button class="btn sm primary" data-eq>Ausrüsten</button>'}${tab === 'finisher' ? '<button class="btn sm" data-fp>▶ Ansehen</button>' : ''}</div></div>`);
+    const prev = $('.prev', card);
+    if (tab === 'board') prev.appendChild(miniBoard(it.id, mySkins()));
+    if (tab === 'pieces') { const lk = pieceLook({ pieces: it.id, shape: p.equipped.shape }); prev.appendChild(miniBoard(p.equipped.board, { w: lk, b: lk }, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR')); }
+    if (tab === 'shape') {
+      const lk = pieceLook({ pieces: p.equipped.pieces, shape: it.id });
+      prev.classList.add('shape-prev');
+      prev.innerHTML = `<div class="shape-row">${['k', 'q', 'r', 'b', 'n', 'p'].map((t) => `<i style="background-image:${pieceURL(t, 'w', lk).replace(/"/g, '&quot;')}"></i>`).join('')}</div>
+        <div class="shape-row dark">${['p', 'n', 'b', 'r', 'q', 'k'].map((t) => `<i style="background-image:${pieceURL(t, 'b', lk).replace(/"/g, '&quot;')}"></i>`).join('')}</div>`;
+    }
+    if (tab === 'finisher') { prev.style.padding = '0'; prev.innerHTML = `<div class="fin-prev" style="--fc:${FIN_COLORS[it.id] || '#7c5cff'}"><span>${it.icon}</span></div>`; }
+    const eq = $('[data-eq]', card);
+    if (eq) eq.onclick = async () => {
+      eq.disabled = true;
+      const r = await emit('shop:equip', { kind: tab, id: it.id });
+      if (r.error) { eq.disabled = false; return toast(esc(r.error), 'warn'); }
+      setProfile(r.profile); sound.click?.();
+      toast(`✨ ${esc(it.name)} ausgerüstet`, 'good');
+      renderInventory();
+    };
+    const fp = $('[data-fp]', card); if (fp) fp.onclick = () => previewFinisher(it.id);
+    grid.appendChild(card);
+  }
+  const locked = list.filter((it) => !ownedOf(p, tab).includes(it.id)).length;
+  $('#inv-locked').innerHTML = locked ? `<span>🔒 Noch <b>${locked}</b> ${INV_TABS.find(([k]) => k === tab)[1].replace(/^\S+ /, '')} zum Freischalten</span><button class="btn sm gold" id="inv-shop">🛒 Zum Shop</button>` : '<span>🏆 Alles aus dieser Kategorie gesammelt!</span>';
+  const sh = $('#inv-shop'); if (sh) sh.onclick = () => { state.shopTab = tab; go('shop'); };
 }
 
 function confirmBuy(kind, it) {

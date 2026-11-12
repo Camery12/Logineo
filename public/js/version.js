@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.16.1';
+export const VERSION = '1.17.0';
 export const VERSION_DATE = '2026-11-12';
 export const CHANGELOG = [
+  ['1.17.0', 'Neuer Inventar-Tab: alle deine Bretter, Figuren, Formen und Finisher an einem Ort – mit Vorschau, Suche und Ausrüsten per Klick'],
   ['1.16.1', '3D-Brett im Finisher-Look: dunkle Bühne mit Spotlicht, Leuchten, dicker Rahmen mit Goldeinlage, große glänzende Figuren'],
   ['1.16.0', 'Mit den 3D-Figuren spielst du jetzt auf einem echten 3D-Brett: 3D-Figuren, 3D-Brett mit Rahmen und Schatten, gleitende Züge, umschaltbar 2D/3D'],
   ['1.15.0', '2 vs 2 (Rot & Gelb gegen Blau & Grün), Replays-Tab für deine Partien, Gruppen im Freunde-Tab (Gruppenchat + gemeinsam spielen), Bedenkzeit beim Zufallsmatch und bei Herausforderungen wählbar, deine Figuren immer in deinem eigenen Skin, neuer Shop-Tab „Formen“ und das 3D-Brett für 3.000 Münzen'],
