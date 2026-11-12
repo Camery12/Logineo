@@ -149,6 +149,7 @@ function setProfile(p, { coinsAnim = false } = {}) {
   const before = state.profile?.coins;
   const skinsBefore = JSON.stringify(state.profile?.equipped || {});
   state.profile = p;
+  const he = document.getElementById('hero-elo'); if (he) he.textContent = p.rating;
   const cc = $('#coin-count');
   if (coinsAnim && before != null && p.coins !== before) animateNumber(cc, before, p.coins);
   else cc.textContent = fmtNum(p.coins);
@@ -235,17 +236,20 @@ $('#login-btn').onclick = () => openAuth('login');
 socket.on('profile:refresh', ({ profile }) => { if (profile) setProfile(profile, { coinsAnim: true }); });
 $('#admin-btn').onclick = () => {
   const ov = openOverlay(`<div class="admin">
-    <h2>🛠️ Admin-Menü</h2><p class="muted small">Spieler per Spielercode (8 Ziffern) oder Benutzername finden und Münzen geben.</p>
+    <h2>🛠️ Admin-Menü</h2><p class="muted small">Spieler per Spielercode (8 Ziffern) oder Benutzername finden – Münzen und Elo geben oder abziehen.</p>
     <form id="adm-find" class="adm-row"><input id="adm-q" placeholder="z. B. 58525408 oder loldonatforever" autocomplete="off"><button class="btn primary">Suchen</button></form>
     <div id="adm-player"></div>
     <div class="modal-actions"><button class="btn" data-x>Schließen</button></div></div>`, { wide: true });
   $('[data-x]', ov.el).onclick = ov.close;
   const show = (pl) => {
     $('#adm-player', ov.el).innerHTML = `<div class="adm-card">
-      <div class="adm-who">${avatar(pl.avatar, 48)}<div><b>@${esc(pl.name)}</b> ${pl.online ? '<i class="dot"></i>' : ''}<div class="muted small">Code ${pl.code} · ${pl.rating} Elo</div></div>
+      <div class="adm-who">${avatar(pl.avatar, 48)}<div><b>@${esc(pl.name)}</b> ${pl.online ? '<i class="dot"></i>' : ''}<div class="muted small">Code ${pl.code} · <b id="adm-elo">${pl.rating}</b> Elo</div></div>
         <span class="pill coin-pill"><i class="coin"></i><b id="adm-coins">${fmtNum(pl.coins)}</b></span></div>
       <div class="adm-quick">${[100, 500, 1000, 5000, 10000].map((n) => `<button class="btn gold sm" data-amt="${n}">+${fmtNum(n)}</button>`).join('')}</div>
       <form id="adm-custom" class="adm-row"><input id="adm-amt" type="number" placeholder="Eigener Betrag (minus zum Abziehen)"><button class="btn primary">Ausführen</button></form>
+      <h4 class="adm-h">🏆 Elo <span class="muted small">(${pl.rating})</span></h4>
+      <div class="adm-quick">${[-100, -50, -10, 10, 50, 100].map((n) => `<button class="btn sm ${n > 0 ? 'good' : 'danger'}" data-elo="${n}">${n > 0 ? '+' : '−'}${Math.abs(n)}</button>`).join('')}</div>
+      <form id="adm-elo-form" class="adm-row"><input id="adm-elo-amt" type="number" placeholder="Elo +/- (z. B. 250 oder -30)"><button class="btn primary" data-mode="add">± Ändern</button><button class="btn" data-mode="set" type="button" id="adm-elo-set">= Setzen</button></form>
       <div class="adm-row"><button class="btn sm" id="adm-view">👁️ Profil ansehen</button><button class="btn sm danger" id="adm-clear">🧹 Song, Banner & Bio entfernen</button></div>
     </div>`;
     $('#adm-view', ov.el).onclick = () => showPlayerProfile(pl.id);
@@ -261,6 +265,20 @@ $('#admin-btn').onclick = () => {
       show(r.player);
     };
     $$('[data-amt]', ov.el).forEach((b) => b.onclick = () => give(+b.dataset.amt));
+    const elo = async (payload) => {
+      const r = await emit('admin:elo', { query: pl.code, ...payload });
+      if (r.error) return toast(esc(r.error), 'warn');
+      if (r.profile) setProfile(r.profile);
+      toast(`🏆 @${esc(r.player.name)}: ${r.change >= 0 ? '+' : ''}${r.change} Elo (jetzt ${r.player.rating})`, 'good');
+      show(r.player);
+    };
+    $$('[data-elo]', ov.el).forEach((b) => b.onclick = () => elo({ amount: +b.dataset.elo }));
+    $('#adm-elo-form', ov.el).onsubmit = (e) => { e.preventDefault(); const n = +$('#adm-elo-amt', ov.el).value; if (n) elo({ amount: n }); };
+    $('#adm-elo-set', ov.el).onclick = () => {
+      const v = $('#adm-elo-amt', ov.el).value;
+      if (v === '' || +v < 0) return toast('Gib den neuen Elo-Wert ein (0 bis 5.000).', 'warn');
+      confirmBox('Elo setzen?', `Elo von @${esc(pl.name)} auf <b>${+v}</b> setzen?`, 'Setzen', () => elo({ set: +v }));
+    };
     $('#adm-custom', ov.el).onsubmit = (e) => { e.preventDefault(); const n = +$('#adm-amt', ov.el).value; if (n) give(n); };
   };
   $('#adm-find', ov.el).onsubmit = async (e) => {
@@ -389,7 +407,7 @@ function renderPlay() {
         <div class="hero-stats">
           <div><b id="hero-online">${state.stats.online}</b><span>Spieler online</span></div>
           <div><b id="hero-playing">${state.stats.playing}</b><span>spielen gerade</span></div>
-          <div><b>${p.rating}</b><span>dein Elo</span></div>
+          <div><b id="hero-elo">${p.rating}</b><span>dein Elo</span></div>
         </div>
       </div>
       <div class="hero-board"><div class="hero-tilt"></div></div>

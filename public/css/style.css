@@ -763,3 +763,4 @@ main { max-width: 1280px; margin: 0 auto; padding: 32px 28px 80px; }
 @media (max-width: 1440px) { .fb { width: min(100%, calc(100vh - 215px)); } }
 @supports (height: 100dvh) { .fb { width: min(100%, calc(100dvh - 150px)); } @media (max-width: 1440px) { .fb { width: min(100%, calc(100dvh - 215px)); } } }
 @media (max-width: 1000px) { .fb { width: min(100%, 760px); } }
+.adm-h { margin: 14px 0 6px; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }

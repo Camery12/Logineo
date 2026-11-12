@@ -937,6 +937,29 @@ io.on('connection', (socket) => {
     ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) }, profile: t === user ? priv(user) : undefined });
   }));
 
+  // Admin: Elo geben/abziehen (amount) oder direkt setzen (set)
+  socket.on('admin:elo', need(({ query, amount, set } = {}, ack) => {
+    if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
+    const t = findTarget(query);
+    if (!t) return ack?.({ error: 'Kein Spieler mit diesem Code oder Namen gefunden.' });
+    const before = t.rating;
+    if (set !== undefined && set !== null && set !== '') {
+      const v = Math.trunc(Number(set));
+      if (!Number.isFinite(v) || v < 0 || v > 5000) return ack?.({ error: 'Elo muss zwischen 0 und 5.000 liegen.' });
+      t.rating = v;
+    } else {
+      const n = Math.trunc(Number(amount));
+      if (!Number.isFinite(n) || n === 0 || Math.abs(n) > 5000) return ack?.({ error: 'Betrag muss zwischen -5.000 und 5.000 liegen (nicht 0).' });
+      t.rating = Math.min(5000, Math.max(0, t.rating + n));
+    }
+    const d = t.rating - before;
+    console.log(`[admin] ${user.name} (${user.code}) -> ${t.name} (${t.code}): Elo ${before} -> ${t.rating}`);
+    save();
+    emitTo(t.id, 'profile:refresh', { profile: priv(t) });
+    if (d) emitTo(t.id, 'toast', { type: d > 0 ? 'good' : 'warn', text: d > 0 ? `🏆 Ein Admin hat dir ${d} Elo gegeben! (jetzt ${t.rating})` : `Ein Admin hat dir ${-d} Elo abgezogen (jetzt ${t.rating}).` });
+    ack?.({ player: { ...pub(t), code: t.code, coins: t.coins, online: online.has(t.id) }, change: d, profile: t === user ? priv(user) : undefined });
+  }));
+
   // --- Profil-Studio
   socket.on('profile:custom', need(({ custom } = {}, ack) => {
     const c = { ...customOf(user) };
