@@ -2202,3 +2202,47 @@ Object.assign(EFFECTS, {
     };
   },
 });
+
+// ------------------------------------------------------------ 3D-Figuren als Bilder fürs normale Brett
+// Rendert alle 12 Figuren einmal mit echten 3D-Modellen (Elfenbein & schwarzer Klavierlack) in PNG-Bilder.
+export function renderPieceSprites({ size = 200 } = {}) {
+  const canvas = document.createElement('canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(size, size, false);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  renderer.setClearColor(0x000000, 0);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  const scene = new THREE.Scene();
+  scene.environment = env;
+  scene.add(new THREE.HemisphereLight('#ffffff', '#2a2420', 0.6));
+  const key = new THREE.DirectionalLight('#fff4e2', 2.2); key.position.set(-2.5, 4, 4); scene.add(key);
+  const rim = new THREE.DirectionalLight('#9fc4ff', 2.4); rim.position.set(3, 2.5, -3); scene.add(rim);
+  const fill = new THREE.DirectionalLight('#ffffff', 0.5); fill.position.set(2, 1, 4); scene.add(fill);
+  const camera = new THREE.PerspectiveCamera(20.5, 1, 0.1, 50);
+  camera.position.set(0, 1.55, 3.6); camera.lookAt(0, 0.6, 0);
+  const mats = {
+    w: new THREE.MeshPhysicalMaterial({ color: '#eadcc0', roughness: 0.3, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 0.9, sheen: 0.4, sheenColor: new THREE.Color('#fff6e6') }),
+    b: new THREE.MeshPhysicalMaterial({ color: '#17171c', roughness: 0.22, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.04, envMapIntensity: 1.2 }),
+  };
+  const out = new Map();
+  try {
+    for (const color of ['w', 'b']) {
+      for (const type of ['p', 'n', 'b', 'r', 'q', 'k']) {
+        const piece = makePiece(type, mats[color]);
+        if (type === 'n') piece.rotation.y = -Math.PI / 2; // Pferdekopf im Profil zur Kamera
+        else piece.rotation.y = 0.5; // leicht gedreht wirkt plastischer
+        scene.add(piece);
+        renderer.render(scene, camera);
+        out.set(type + color, canvas.toDataURL('image/png'));
+        scene.remove(piece);
+      }
+    }
+  } finally {
+    pmrem.dispose(); env.dispose(); for (const m of Object.values(mats)) m.dispose();
+    renderer.dispose(); renderer.forceContextLoss();
+  }
+  return out;
+}

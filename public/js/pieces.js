@@ -56,7 +56,25 @@ export function pieceSVG(type, color, skinId) {
   </svg>`;
 }
 
+// 3D-Figuren: einmal mit Three.js rendern (lazy), auf dem Gerät speichern, bis dahin Platzhalter zeigen
+const SPRITE_KEY = 'pieces3d-v4';
+const sprites3d = new Map();
+let loading3d = null;
+try { const c = JSON.parse(localStorage.getItem(SPRITE_KEY) || 'null'); if (c) for (const [k, v] of Object.entries(c)) sprites3d.set(k, `url("${v}")`); } catch { /* egal */ }
+function load3d() {
+  if (loading3d || typeof window === 'undefined') return;
+  loading3d = import('./finisher.js').then((m) => {
+    const map = m.renderPieceSprites({ size: 200 });
+    const store = {};
+    for (const [k, url] of map) { sprites3d.set(k, `url("${url}")`); store[k] = url; }
+    try { localStorage.setItem(SPRITE_KEY, JSON.stringify(store)); } catch { /* Speicher voll – egal */ }
+    window.dispatchEvent(new CustomEvent('pieces3d'));
+  }).catch((e) => { console.warn('3D-Figuren konnten nicht gerendert werden', e); });
+}
+export const has3dSprites = () => sprites3d.size === 12;
+
 export function pieceURL(type, color, skinId) {
+  if (skinId === 'figuren3d') { const s = sprites3d.get(type + color); if (s) return s; load3d(); }
   const key = type + color + skinId;
   if (!cache.has(key)) cache.set(key, `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(pieceSVG(type, color, skinId))}")`);
   return cache.get(key);

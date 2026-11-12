@@ -2243,6 +2243,14 @@ async function renderLeaderboard() {
   });
 }
 
+// 3D-Figuren sind fertig gerendert: überall die echten Bilder einsetzen
+window.addEventListener('pieces3d', () => {
+  board.setSkins(board.skins);
+  if (state.view === 'shop') renderShop();
+  if (state.view === 'play') renderHeroBoard();
+  if (state.view === 'profile') renderProfile();
+});
+
 // ================================================================ Version
 function showChangelog() {
   openOverlay(`<h2>Version ${VERSION}</h2><p class="muted">Stand ${new Date(VERSION_DATE).toLocaleDateString('de-DE')}</p>

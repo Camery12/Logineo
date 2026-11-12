@@ -111,6 +111,11 @@ export const PIECES = [
     w: { fill: ['#ffffff', '#bff6ff'], stroke: '#00d5ee', detail: '#00a8c4', swirl: '#7af7ff', glow: '#7af7ff' },
     b: { fill: ['#1a0026', '#050008'], stroke: '#ff4fd8', detail: '#ff4fd8', swirl: '#ff8ae8', glow: '#ff4fd8' },
     mat: { metal: 0.3, rough: 0.2, emissive: 0.7 } },
+  // 3D-Figuren: werden im Browser mit echten 3D-Modellen gerendert (Elfenbein & Klavierlack); die Farben unten sind nur der Platzhalter
+  { id: 'figuren3d', name: '3D-Figuren', price: 3500, render3d: true, desc: 'Echte 3D-Modelle aus Elfenbein und schwarzem Klavierlack – mit Licht, Spiegelungen und Glanz.',
+    w: { fill: ['#fbf6ec', '#d9cdb6'], stroke: '#5a4a32', detail: '#5a4a32' },
+    b: { fill: ['#3a3a42', '#121216'], stroke: '#000000', detail: '#c9c9d4' },
+    mat: { metal: 0.12, rough: 0.22 } },
   { id: 'neon', name: 'Neon', price: 1800, desc: 'Leuchtet im Dunkeln.',
     w: { fill: ['#0f2a3d', '#071320'], stroke: '#39f0ff', detail: '#39f0ff', glow: '#39f0ff' },
     b: { fill: ['#3a0f3d', '#170620'], stroke: '#ff3df0', detail: '#ff3df0', glow: '#ff3df0' },
