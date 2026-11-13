@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.21.1';
+export const VERSION = '1.22.0';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.22.0', 'Zufalls-Suche für 2 vs 2 und 4er-Schach: „Zufällige Mitspieler“ findet Leute mit gleichem Modus und gleicher Bedenkzeit – bei 4 Spielern geht es sofort los, sonst wird nach 40 Sekunden mit Bots aufgefüllt'],
   ['1.21.1', 'Figuren wieder gestochen scharf, besonders auf iPhone und iPad (höhere Auflösung, Safari-Fix)'],
   ['1.21.0', 'Zug-Punkte auf jedem Brett gut sichtbar (invertierte Farbe, auch im 4er- und 3D-Brett). Noobi hat jetzt 0 Elo und spielt wie ein totaler Neuling; alle Bots neu abgestimmt, passend zu ihrem Elo'],
   ['1.20.2', 'Viel flüssiger auf Handy und iPad: kein Einfrieren mehr nach dem Öffnen, Figuren werden als fertige Bilder gezeichnet, kein teurer Milchglas-Effekt mehr, sparsamere Blitz-Aura und Animationen'],

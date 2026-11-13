@@ -331,7 +331,7 @@ function ensureVs(u) {
 }
 
 function broadcastStats() {
-  io.emit('stats', { live: liveGames().length, online: online.size, playing: [...games.values()].filter((g) => g.status !== 'over').length * 2 + [...games4.values()].filter((g) => g.status === 'playing').reduce((s, g) => s + g.humans, 0), queue: queue.length, queueBy: Object.fromEntries(RANDOM_TIMES.map((t) => [t, queue.filter((q) => (q.timeMs || 600_000) === t).length])) });
+  io.emit('stats', { live: liveGames().length, online: online.size, playing: [...games.values()].filter((g) => g.status !== 'over').length * 2 + [...games4.values()].filter((g) => g.status === 'playing').reduce((s, g) => s + g.humans, 0), queue: queue.length, fourQueue: { t: fourQueue.filter((q) => q.teams).length, f: fourQueue.filter((q) => !q.teams).length }, queueBy: Object.fromEntries(RANDOM_TIMES.map((t) => [t, queue.filter((q) => (q.timeMs || 600_000) === t).length])) });
 }
 setInterval(broadcastStats, 5000);
 
@@ -539,8 +539,47 @@ function fourBusy(uid) {
   const g = fourGameOf(uid);
   if (g && g.status === 'playing' && g.state.alive[fourColorOf(g, uid)]) return true;
   for (const l of lobbies4.values()) if (l.seats.includes(uid)) return true;
+  if (fourQueue.some((q) => q.uid === uid)) return true;
   return false;
 }
+// ---------------------------------------------------------------- Zufalls-Suche für 2 vs 2 / 4er-Schach
+// Gleicher Modus + gleiche Bedenkzeit. 4 Spieler -> Start. Nach FOUR_FILL_MS mit mind. 2 Spielern: Rest mit Bots auffüllen.
+const FOUR_FILL_MS = 40_000;
+let fourQueue = []; // [{ uid, teams, timeMs, since }]
+const fqKey = (q) => `${q.teams ? 't' : 'f'}:${q.timeMs}`;
+function fourQueueState() {
+  for (const q of fourQueue) {
+    const same = fourQueue.filter((x) => fqKey(x) === fqKey(q));
+    const oldest = Math.min(...same.map((x) => x.since));
+    emitTo(q.uid, 'four:queue', { searching: true, teams: q.teams, timeMs: q.timeMs, count: same.length, since: q.since, fillAt: same.length >= 2 ? oldest + FOUR_FILL_MS : null, players: same.map((x) => pub(db.users[x.uid])) });
+  }
+}
+function leaveFourQueue(uid, notify = false) {
+  const had = fourQueue.some((q) => q.uid === uid);
+  fourQueue = fourQueue.filter((q) => q.uid !== uid);
+  if (had) { if (notify) emitTo(uid, 'four:queue', { searching: false }); fourQueueState(); broadcastStats(); }
+}
+function tryFourMatch() {
+  fourQueue = fourQueue.filter((q) => online.has(q.uid) && !userGame.has(q.uid) && !userFour.has(q.uid));
+  const groups = new Map();
+  for (const q of fourQueue) { const k = fqKey(q); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); }
+  let started = false;
+  for (const list of groups.values()) {
+    list.sort((a, b) => a.since - b.since);
+    while (list.length >= 4 || (list.length >= 2 && Date.now() - list[0].since >= FOUR_FILL_MS)) {
+      const take = list.splice(0, 4), ids = take.map((q) => q.uid), { teams, timeMs } = take[0];
+      fourQueue = fourQueue.filter((q) => !ids.includes(q.uid));
+      // Teams zufällig, aber ausgeglichen (bei 2 Menschen: einer pro Team, Bots als Partner)
+      const side = {}; shuffle([...ids]).forEach((id, i) => { side[id] = i % 2; });
+      for (const id of ids) emitTo(id, 'four:queue', { searching: false, matched: true });
+      startFour(ids, timeMs, { teams, side });
+      started = true;
+    }
+  }
+  if (started) broadcastStats();
+  fourQueueState();
+}
+setInterval(() => { if (fourQueue.length) tryFourMatch(); }, 2000);
 const lobbyPayload = (l) => ({ code: l.code, host: l.hostId, timeMs: l.timeMs, teams: !!l.teams, side: l.side || {}, players: l.seats.map((id) => pub(db.users[id])) });
 const FOUR_TIMES = [60_000, 180_000, 300_000, 600_000, 900_000];
 const fourTime = (t) => (FOUR_TIMES.includes(t) ? t : 300_000);
@@ -1519,6 +1558,16 @@ io.on('connection', (socket) => {
     startFour([user.id], fourTime(timeMs), { teams: !!teams, side: { [user.id]: 0 } });
     ack?.({ ok: true });
   }));
+  socket.on('four:queue', need(({ timeMs = 300_000, teams = true } = {}, ack) => {
+    { const blk = adminApi.playBlock('four'); if (blk) return ack?.({ error: blk }); }
+    if (banErr(user)) return ack?.({ error: banErr(user) });
+    if (userGame.has(user.id) || fourBusy(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel, einer Lobby oder suchst schon.' });
+    queue = queue.filter((q) => q.userId !== user.id);
+    fourQueue.push({ uid: user.id, teams: !!teams, timeMs: fourTime(timeMs), since: Date.now() });
+    ack?.({ ok: true });
+    tryFourMatch(); broadcastStats();
+  }));
+  socket.on('four:unqueue', need(() => leaveFourQueue(user.id, true)));
   socket.on('four:leave', need(() => {
     leaveLobby(user.id);
     const g = fourGameOf(user.id);
@@ -1820,6 +1869,7 @@ io.on('connection', (socket) => {
     if (banErr(user)) return ack?.({ error: banErr(user) });
     if (userGame.has(user.id)) return ack?.({ error: 'Du bist bereits in einem Spiel.' });
     const t = RANDOM_TIMES.includes(timeMs) ? timeMs : 600_000;
+    leaveFourQueue(user.id, true);
     queue = queue.filter((q) => q.userId !== user.id && online.has(q.userId));
     // Gegner mit derselben Bedenkzeit und möglichst ähnlicher Wertung
     let best = null;
@@ -1942,6 +1992,7 @@ io.on('connection', (socket) => {
     if (!user || online.get(user.id) !== socket) return;
     online.delete(user.id);
     adminApi.onDisconnect(user);
+    leaveFourQueue(user.id);
     notifyFriends(user, false);
     queue = queue.filter((q) => q.userId !== user.id);
     for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c);

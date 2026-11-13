@@ -135,7 +135,7 @@ function warmFinisherLater() {
 // ---------------------------------------------------------------- Automatisch aktualisieren
 // Nach einem Update lädt die Seite kurz neu – aber nie mitten in einer Partie, Suche, Abstimmung oder einem Finisher.
 const fourActive = () => !!(state.four && state.four.status === 'playing' && state.four.alive[state.four.you]);
-const isBusy = () => !!(state.view === 'game' || state.view === 'four' || fourActive() || state.fourLobby || state.game?.active || (state.bot && !state.bot.over) || state.searching || state.room
+const isBusy = () => !!(state.fourSearch?.searching || state.view === 'game' || state.view === 'four' || fourActive() || state.fourLobby || state.game?.active || (state.bot && !state.bot.over) || state.searching || state.room
   || $('.overlay') || $('.finisher') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName));
 function checkUpdate() {
   const v = state.updateTo;
@@ -1323,14 +1323,31 @@ function renderFourCard() {
     $('#four-leave').onclick = () => { socket.emit('four:leave'); state.fourLobby = null; renderFourCard(); };
     const sw = $('#four-swap'); if (sw) sw.onclick = async () => { const r = await emit('four:team'); if (r.error) toast(esc(r.error), 'warn'); };
     const goBtn = $('#four-go'); if (goBtn) goBtn.onclick = async () => { const r = await emit('four:start'); if (r.error) toast(esc(r.error), 'warn'); };
+  } else if (state.fourSearch?.searching) {
+    // Zufalls-Suche läuft
+    const q = state.fourSearch;
+    el.innerHTML = `<div class="four-head"><div class="ic">🎲</div><div><h3>Suche Mitspieler … <span class="tag">${q.teams ? '🤝 2 vs 2' : '👥 Jeder gegen jeden'} · ⏱️ ${timeLabel(q.timeMs)}</span></h3>
+      <p id="fq-info"></p></div></div>
+      <div class="fq-seats">${[0, 1, 2, 3].map((i) => { const p = q.players?.[i]; return p ? `<div class="seat on">${avatar(p.avatar, 34)}<b>${esc(p.name)}</b>${p.id === me ? '<span class="tag">Du</span>' : ''}</div>` : '<div class="seat searching-seat"><span class="spinner"></span><span class="muted">sucht …</span></div>'; }).join('')}</div>
+      <div class="room-actions four-actions-row"><button class="btn danger" id="fq-cancel">✕ Suche abbrechen</button></div>`;
+    const info = () => {
+      const box = $('#fq-info'); if (!box || !state.fourSearch?.searching) return clearInterval(state.fqTimer);
+      const s = Math.floor((Date.now() - q.since) / 1000), wait = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+      const fill = q.fillAt ? Math.max(0, Math.ceil((q.fillAt - Date.now()) / 1000)) : null;
+      box.innerHTML = `<b>${q.count || 1}/4</b> Spieler gefunden · Wartezeit ${wait}${fill != null ? ` · ${fill ? `in <b>${fill} s</b> wird mit Bots aufgefüllt` : 'startet gleich mit Bots …'}` : ' · sobald ein zweiter Spieler da ist, wird nach 40 s mit Bots aufgefüllt'}`;
+    };
+    clearInterval(state.fqTimer); info(); state.fqTimer = setInterval(info, 500);
+    $('#fq-cancel').onclick = () => { socket.emit('four:unqueue'); state.fourSearch = null; renderFourCard(); };
   } else {
     const teams = mode === 'teams';
+    const waiting = state.stats.fourQueue?.[teams ? 't' : 'f'] || 0;
     el.innerHTML = `<div class="four-head"><div class="ic">${teams ? '🤝' : '👥'}</div><div><h3>${teams ? '2 vs 2' : '4er-Schach'} <span class="tag new-tag">NEU</span></h3>
       <p>${teams ? 'Zwei Teams auf dem großen Brett: Rot & Gelb gegen Blau & Grün. Partner sitzen sich gegenüber und können sich nicht schlagen. Ist einer matt, verliert sein Team.' : 'Vier Spieler, ein riesiges Brett – jeder gegen jeden. Wer matt ist, fliegt raus, der Letzte gewinnt.'} Leere Plätze übernehmen Bots.</p></div></div>
       <div class="seg mode-seg" id="four-mode"><button data-m="teams" class="${teams ? 'on' : ''}">🤝 2 vs 2</button><button data-m="ffa" class="${teams ? '' : 'on'}">👥 Jeder gegen jeden</button></div>
       <div class="four-row">
         ${timeSeg('four-time', FOUR_TIMES, t)}
-        <button class="btn primary" id="four-create">${teams ? '🤝' : '👥'} Lobby erstellen</button>
+        <button class="btn primary" id="four-random">🎲 Zufällige Mitspieler${waiting ? ` <span class="tag">${waiting} suchen</span>` : ''}</button>
+        <button class="btn" id="four-create">${teams ? '🤝' : '👥'} Lobby erstellen</button>
         <button class="btn" id="four-solo">🤖 ${teams ? 'Du + Bot gegen 2 Bots' : 'Gegen 3 Bots'}</button>
       </div>
       <p class="muted small" style="margin:0">${teams ? `Siegerteam: ${coinHTML(220)} pro Spieler · Verlierer: ${coinHTML(30)}` : `Platz 1: ${coinHTML(300)} · Platz 2: ${coinHTML(120)} · Platz 3: ${coinHTML(60)} · Platz 4: ${coinHTML(25)}`} – mit Bots weniger. Freunde treten mit dem Code bei „Code eingeben“ bei – oder lade eine ganze Gruppe unter „Freunde“ ein.</p>`;
@@ -1342,8 +1359,20 @@ function renderFourCard() {
       state.fourLobby = r.lobby; renderFourCard(); sound.notify();
     };
     $('#four-solo').onclick = async () => { const r = await emit('four:solo', { timeMs: t, teams }); if (r.error) toast(esc(r.error), 'warn'); };
+    $('#four-random').onclick = async () => {
+      const r = await emit('four:queue', { timeMs: t, teams });
+      if (r.error) return toast(esc(r.error), 'warn');
+      state.fourSearch = { searching: true, teams, timeMs: t, since: Date.now(), count: 1, players: [state.profile] }; renderFourCard(); sound.notify();
+    };
   }
 }
+socket.on('four:queue', (q) => {
+  const before = state.fourSearch?.count || 0;
+  state.fourSearch = q.searching ? q : null;
+  if (q.searching && q.count > before && before) sound.notify();
+  if (q.matched) toast('🎲 Mitspieler gefunden – los geht’s!', 'good');
+  renderFourCard();
+});
 socket.on('four:lobby', (l) => {
   if (l.closed) { state.fourLobby = null; if (!l.started) toast('Die 4er-Lobby wurde geschlossen.', 'warn'); }
   else { if (state.fourLobby && l.players.length > state.fourLobby.players.length) sound.notify(); state.fourLobby = l; }

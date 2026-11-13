@@ -1186,3 +1186,7 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .fmk.dot { mix-blend-mode: difference; }
 .fmk.dot::after { background: rgba(255, 255, 255, .78); }
 .fmk.dot.cap::after { background: none; border-color: rgba(255, 255, 255, .78); }
+/* Zufalls-Suche 2v2 / 4er */
+.fq-seats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.searching-seat { justify-content: center; gap: 8px; }
+@media (max-width: 700px) { .fq-seats { grid-template-columns: 1fr 1fr; } }
