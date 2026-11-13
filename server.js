@@ -448,12 +448,13 @@ function endGame(g, result, reason) {
   const winner = result === 'w' ? W : result === 'b' ? B : null;
   const finisher = reason === 'checkmate' && winner ? winner.equipped.finisher : null;
   const plies = g.chess.history().length;
-  const unrated = fairPlay(g, result, reason) || (reason === 'abandon' ? null : adminApi.precheck(W, B, result));
+  const unrated = fairPlay(g, result, reason) || (reason === 'abandon' ? null : adminApi.precheck(W, B, result, reason, plies));
+  const ef = unrated || g.variant ? { factor: 1 } : adminApi.eloFactor(W, B, result); // viele echte Siege am selben Tag: weniger Elo
   const rBefore = { w: W.rating, b: B.rating };
   if (unrated) console.log(`⚖️ nicht gewertet (${W.name} – ${B.name}): ${unrated}`);
   for (const [u, color, d0, opp] of [[W, 'w', dW, B], [B, 'b', dB, W]]) {
     const outcome = result === 'draw' ? 'draw' : result === color ? 'win' : 'loss';
-    let d = g.variant ? 0 : d0; // Spaß-Varianten (Queen-Modus) zählen nicht für Elo
+    let d = g.variant ? 0 : Math.round(d0 * ef.factor); // Spaß-Varianten (Queen-Modus) zählen nicht für Elo
     let coins = adminApi.coins(outcome === 'win' ? REWARDS.win : outcome === 'draw' ? REWARDS.draw : REWARDS.loss);
     if (unrated) { d = 0; coins = 0; }
     if (reason === 'abandon') {
@@ -474,6 +475,7 @@ function endGame(g, result, reason) {
     addVs(u, hEntry);
     u.history.unshift(hEntry);
     u.history = u.history.slice(0, 50);
+    if (ef.note && !unrated) emitTo(u.id, 'toast', { type: '', text: `ℹ️ ${ef.note}` });
     emitTo(u.id, 'game:over', {
       id: g.id, result, reason, outcome, coins, ratingChange: d, finisher, unrated, variant: g.variant || null,
       winnerName: winner?.name || null, fen: g.chess.fen(), board: g.board,

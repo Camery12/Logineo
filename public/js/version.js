@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.18.0';
-export const VERSION_DATE = '2026-11-12';
+export const VERSION = '1.18.1';
+export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.18.1', 'Anti-Cheat fairer: Wer einfach besser spielt, wird nicht mehr bestraft – echte, ausgespielte Partien werden immer gewertet. Nur sehr kurze oder früh aufgegebene Partien gegen denselben Gegner gelten als Farming. Bei vielen echten Siegen gegen denselben Gegner am selben Tag gibt es weniger Elo (ab dem 4. Sieg die Hälfte, ab dem 6. ein Viertel)'],
   ['1.18.0', 'Anti-Cheat gegen Elo-Farming, Zweitkonten, Bot-Farming und auffällige Zugzeiten; Admin-Panel mit 6 neuen Bereichen (Anti-Cheat, Statistik, Events & Shop, Moderation, Protokoll, System) und vielen neuen Spieler- und Live-Werkzeugen; Münz-Events, Shop-Rabatte und Banner'],
   ['1.17.0', 'Neuer Inventar-Tab: alle deine Bretter, Figuren, Formen und Finisher an einem Ort – mit Vorschau, Suche und Ausrüsten per Klick'],
   ['1.16.1', '3D-Brett im Finisher-Look: dunkle Bühne mit Spotlicht, Leuchten, dicker Rahmen mit Goldeinlage, große glänzende Figuren'],
