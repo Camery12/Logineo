@@ -230,7 +230,7 @@ export const PROFILE_OPTIONS = {
   accent: ['#7c5cff', '#22d3ee', '#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#eab308', '#ffffff', '#a3e635'],
 };
 export const DEFAULT_CUSTOM = { banner: 'standard', frame: 'keiner', nameFx: 'keiner', particles: 'keine', accent: '#7c5cff', bio: '', showInventory: true, showcase: null, bannerImg: null };
-export const MUSIC_MAX_BYTES = 3_000_000;   // 3 MB (≈ 2–3 Min. MP3)
+export const MUSIC_MAX_BYTES = 5_000_000;   // 5 MB (≈ 4–5 Min. MP3)
 export const MUSIC_MAX_VOLUME = 0.35;       // Lautstärke-Limit für Profilsongs
 
 // ---------------------------------------------------------------- Abzeichen (Badges): 25 Stück in 5 Seltenheitsstufen

@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.25.0';
+export const VERSION = '1.25.1';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.25.1', 'Profilsong jetzt bis 5 MB (vorher 3 MB)'],
   ['1.25.0', 'Handel unter Freunden: Im Chat auf „🔁 Handeln“ tippen und Bretter, Figuren, Formen, Finisher oder Münzen tauschen. Der Freund kann annehmen oder ablehnen, der Server tauscht sicher'],
   ['1.24.0', 'Rätsel des Tages auf der Startseite: Finde das Matt in 1 direkt auf dem Brett – richtig gelöst gibt es deinen 3D-Finisher und +50 Münzen (einmal pro Tag), mit Serie für mehrere Tage in Folge'],
   ['1.23.5', 'Blitz-Aura ruhiger: kleiner, dünnere Blitze, langsameres und sanfteres Flackern'],

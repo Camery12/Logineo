@@ -331,7 +331,8 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 
 const server = http.createServer(app);
 // schnellere Erkennung von Verbindungsabbrüchen (z. B. iPad-Tab im Hintergrund)
-const io = new Server(server, { maxHttpBufferSize: 5_000_000, pingInterval: 10_000, pingTimeout: 9_000 });
+// 8 MB pro Nachricht: ein 5-MB-Profilsong ist als Base64 etwa 6,9 MB groß
+const io = new Server(server, { maxHttpBufferSize: 8_000_000, pingInterval: 10_000, pingTimeout: 9_000 });
 
 const online = new Map();      // userId -> socket
 const games = new Map();       // gameId -> game
@@ -1618,7 +1619,7 @@ io.on('connection', (socket) => {
       if (data !== undefined) {
         const ok = typeof data === 'string' && /^data:audio\/(mpeg|mp3|ogg|wav|x-wav|mp4|x-m4a|aac|webm);base64,/.test(data);
         if (!ok) return ack?.({ error: 'Bitte eine Audiodatei (MP3, OGG, M4A, WAV) hochladen.' });
-        if (data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal 3 MB).' });
+        if (data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal 5 MB).' });
         await musicSet(user.id, data);
         user.music = { title: user.music?.title || 'Profilsong', volume: user.music?.volume ?? 0.6, at: Date.now() };
       }

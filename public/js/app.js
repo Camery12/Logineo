@@ -2726,7 +2726,7 @@ function renderStudio(root, p) {
         <h4>Inventar</h4>
         <label class="st-toggle"><input type="checkbox" id="st-inv" ${c.showInventory !== false ? 'checked' : ''}><span></span> Inventar für andere sichtbar</label>
         <h4>🎵 Profilsong</h4>
-        <p class="muted small">Spielt leise ab, wenn jemand dein Profil öffnet (Lautstärke begrenzt, Besucher können stummschalten). MP3/OGG/M4A, max. 3 MB. Lade nur Musik hoch, die du verwenden darfst.</p>
+        <p class="muted small">Spielt leise ab, wenn jemand dein Profil öffnet (Lautstärke begrenzt, Besucher können stummschalten). MP3/OGG/M4A, max. 5 MB. Lade nur Musik hoch, die du verwenden darfst.</p>
         ${p.music ? `<div class="st-song"><b>🎶 ${esc(p.music.title)}</b>
             <form id="st-mtitle" class="adm-row"><input name="t" maxlength="40" value="${esc(p.music.title)}" placeholder="Songtitel"><button class="btn sm">Titel speichern</button></form>
             <label class="st-vol">Lautstärke <input type="range" id="st-mvol" min="0" max="100" value="${Math.round((p.music.volume ?? 0.6) * 100)}"></label>
@@ -2752,7 +2752,7 @@ function renderStudio(root, p) {
   const mfile = $('#st-music', box);
   if (mfile) mfile.onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
-    if (f.size > MUSIC_MAX_BYTES) return toast(`Der Song ist zu groß (${(f.size / 1e6).toFixed(1)} MB). Maximal 3 MB – kürze ihn oder nimm eine niedrigere Qualität.`, 'warn');
+    if (f.size > MUSIC_MAX_BYTES) return toast(`Der Song ist zu groß (${(f.size / 1e6).toFixed(1)} MB). Maximal 5 MB – kürze ihn oder nimm eine niedrigere Qualität.`, 'warn');
     toast('⏳ Song wird hochgeladen…');
     const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(f); });
     const title = f.name.replace(/\.[^.]+$/, '').slice(0, 40);
