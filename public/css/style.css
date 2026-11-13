@@ -1266,3 +1266,11 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 }
 .top-right { flex-shrink: 0; white-space: nowrap; }
 .online-pill, .coin-pill, .me-btn { white-space: nowrap; }
+
+/* Blitz-Aura ruhiger: kleiner, langsamer, sanfter (überschreibt die Werte oben) */
+.piece.aura::before, .piece.aura::after, .mini-board i.aura::before, .mini-board i.aura::after { inset: -7%; }
+.piece.aura::before, .mini-board i.aura::before { animation: zapA 4s ease-in-out infinite; animation-delay: var(--ad, 0s); }
+.piece.aura::after, .mini-board i.aura::after { animation: zapB 6.5s steps(1) infinite; animation-delay: var(--ad, 0s); }
+@keyframes zapA { 0%, 100% { opacity: .2; } 30% { opacity: .55; } 34% { opacity: .3; } 38% { opacity: .6; } 60% { opacity: .25; } 80% { opacity: .45; } }
+@keyframes zapB { 0% { opacity: 0; transform: rotate(0deg); } 20% { opacity: .55; } 23% { opacity: 0; } 50% { transform: rotate(180deg); } 70% { opacity: .5; } 73% { opacity: 0; } }
+@media (pointer: coarse) { .piece.aura::before, .mini-board i.aura::before { animation-duration: 4.5s; } }

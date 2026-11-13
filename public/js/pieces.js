@@ -238,7 +238,7 @@ export function auraVars(look, color) {
   const key = kind + color;
   if (!auraCache.has(key)) {
     const [core, glow] = AURA_COLORS[kind][color];
-    const svg = (d) => `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='none' stroke-linecap='round' stroke-linejoin='round'><path d='${d}' stroke='${glow}' stroke-width='7' opacity='.45'/><path d='${d}' stroke='${glow}' stroke-width='3.6'/><path d='${d}' stroke='${core}' stroke-width='1.4'/></g></svg>`)}")`;
+    const svg = (d) => `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='none' stroke-linecap='round' stroke-linejoin='round'><path d='${d}' stroke='${glow}' stroke-width='5' opacity='.35'/><path d='${d}' stroke='${glow}' stroke-width='2.6'/><path d='${d}' stroke='${core}' stroke-width='1.1'/></g></svg>`)}")`;
     auraCache.set(key, `--boltA:${svg(BOLTS[0])};--boltB:${svg(BOLTS[1])};--aura:${glow}`);
   }
   return auraCache.get(key);

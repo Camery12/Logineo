@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.23.4';
+export const VERSION = '1.23.5';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.23.5', 'Blitz-Aura ruhiger: kleiner, dünnere Blitze, langsameres und sanfteres Flackern'],
   ['1.23.4', 'Kopfzeile auf breiten Bildschirmen (1440–2100 Pixel) nicht mehr abgeschnitten: kompakte Tabs mit Symbol über dem Text'],
   ['1.23.3', 'Firefox: Leiste unten ist wieder deckend (Inhalt schien durch). Casino: schnelles Klicken bei Mines wird nicht mehr blockiert'],
   ['1.23.2', 'Blitz-Paket kostet 3.000 Münzen (1.000 mehr als vorher), Blitz-Figuren und Gewitterfront wieder zum normalen Preis'],
