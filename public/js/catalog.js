@@ -47,7 +47,7 @@ export const BOARDS = [
     tex: { light: { kind: 'rift', base: '#4d3d80', accent: '#7af7ff', accent2: '#ff4fd8', deep: '#1c1436' }, dark: { kind: 'rift', base: '#170d2c', accent: '#ff4fd8', accent2: '#7af7ff', deep: '#020104' } } },
   { id: 'royal', name: 'Königsgold', price: 2000, light: '#fff4d6', dark: '#c9a227', frame: '#3a2a00', last: 'rgba(255, 255, 255, .5)', desc: 'Nur für wahre Könige.',
     tex: { light: { kind: 'marble', base: '#fff4d6', accent: '#ecd9a8' }, dark: { kind: 'brushed', base: '#c9a227', accent: '#f2d675' } } },
-  { id: 'gewitter', name: 'Gewitterfront', price: 1_800_000, light: '#3a4568', dark: '#121830', frame: '#05070f', last: 'rgba(255, 226, 80, .55)', desc: 'Dunkle Sturmwolken, durchzogen von leuchtenden Blitzrissen – aus dem Blitz-Paket.',
+  { id: 'gewitter', name: 'Gewitterfront', price: 1800, light: '#3a4568', dark: '#121830', frame: '#05070f', last: 'rgba(255, 226, 80, .55)', desc: 'Dunkle Sturmwolken, durchzogen von leuchtenden Blitzrissen – aus dem Blitz-Paket.',
     tex: { light: { kind: 'rift', base: '#3e4a70', accent: '#ffe45c', accent2: '#8fe3ff', deep: '#1b2340' }, dark: { kind: 'rift', base: '#141a33', accent: '#7ad7ff', accent2: '#ffe45c', deep: '#05070f' } } },
   // 3D-Brett: das Brett wird schräg im Raum gezeigt, die Figuren stehen aufrecht darauf
   { id: 'brett3d', name: '3D-Brett', price: 3000, view3d: true, light: '#ecd2a4', dark: '#8a5a32', frame: '#2a160a', last: 'rgba(255, 213, 79, .55)', desc: 'Das Brett steht schräg im Raum – mit dicker Holzplatte, Schatten und aufrecht stehenden Figuren. Echtes 3D-Gefühl beim Spielen.',
@@ -122,7 +122,7 @@ export const PIECES = [
     b: { fill: ['#3a3a42', '#121216'], stroke: '#000000', detail: '#c9c9d4' },
     mat: { metal: 0.12, rough: 0.22 } },
   // Blitz: echte, animierte Blitz-Aura um jede Figur (aura: 'lightning')
-  { id: 'blitz', name: 'Blitz', price: 2_200_000, aura: 'lightning', desc: 'Geladene Figuren mit echter Blitz-Aura: Um jede Figur zucken knisternde Blitze – golden bei Weiß, eisblau bei Schwarz.',
+  { id: 'blitz', name: 'Blitz', price: 2200, aura: 'lightning', desc: 'Geladene Figuren mit echter Blitz-Aura: Um jede Figur zucken knisternde Blitze – golden bei Weiß, eisblau bei Schwarz.',
     w: { fill: ['#fffdf0', '#ffd23f'], stroke: '#6b4700', detail: '#4a3000', glow: '#ffe45c' },
     b: { fill: ['#2c3566', '#0a0d24'], stroke: '#7ad7ff', detail: '#bdf0ff', glow: '#4cc9ff' },
     mat: { metal: 0.35, rough: 0.2, emissive: 0.75 } },
@@ -174,7 +174,7 @@ export const FINISHERS = [
 // Bundles: Brett + Figuren + Finisher günstiger. Bereits Gekauftes wird nicht nochmal berechnet.
 export const BUNDLES = [
   { id: 'starter', name: 'Starter-Pack', icon: '🎁', discount: 1, items: [['board', 'silber'], ['pieces', 'chrom'], ['finisher', 'midas']], desc: 'Kostenlos für alle: Silber-Marmor-Brett, Silber-Chrom-Figuren und der Midas-Touch.' },
-  { id: 'blitz', name: 'Blitz-Paket', icon: '⚡', discount: 0.25, isNew: true, priceMult: 1000, items: [['board', 'gewitter'], ['pieces', 'blitz'], ['finisher', 'blitz']], desc: 'NEU: Figuren mit echter Blitz-Aura, das Gewitterfront-Brett und der Donnerschlag-Finisher.' },
+  { id: 'blitz', name: 'Blitz-Paket', icon: '⚡', discount: 0.25, isNew: true, priceAdd: 1000, items: [['board', 'gewitter'], ['pieces', 'blitz'], ['finisher', 'blitz']], desc: 'NEU: Figuren mit echter Blitz-Aura, das Gewitterfront-Brett und der Donnerschlag-Finisher.' },
   { id: 'viertewand', name: 'Vierte-Wand-Paket', icon: '🪟', discount: 0.25, isNew: true, items: [['board', 'glasbruch'], ['pieces', 'prisma'], ['finisher', 'viertewand']], desc: 'NEU: Zerbrochener Bildschirm, Prisma-Glasfiguren und der Finisher, der aus dem Bildschirm bricht.' },
   { id: 'realitaet', name: 'Realitätsriss-Paket', icon: '🌀', discount: 0.25, isNew: true, items: [['board', 'riss'], ['pieces', 'antimaterie'], ['finisher', 'riss']], desc: 'NEU: Die Leere zwischen den Dimensionen, Antimaterie-Figuren und der Riss, der die ganze Website verschluckt.' },
   { id: 'eiszeit', name: 'Eiszeit-Paket', icon: '🧊', discount: 0.2, items: [['board', 'eis'], ['pieces', 'arktis'], ['finisher', 'kristall']], desc: 'Gletschereis-Brett, Arktis-Marmor-Figuren und der Eissplitter-Finisher.' },
@@ -211,7 +211,7 @@ export const findItem = (kind, id) => (CATALOG[kind] || []).find((x) => x.id ===
 export function bundlePrice(bundle, owned) {
   const missing = bundle.items.filter(([k, id]) => !owned?.[k]?.includes(id));
   const full = missing.reduce((s, [k, id]) => s + (findItem(k, id)?.price || 0), 0);
-  return { price: Math.min(2000, Math.round((full * (1 - bundle.discount)) / 10) * 10) * (bundle.priceMult || 1), full, missing }; // höchstens 2.000 (× priceMult)
+  return { price: Math.min(2000, Math.round((full * (1 - bundle.discount)) / 10) * 10) + (missing.length ? bundle.priceAdd || 0 : 0), full, missing }; // höchstens 2.000 (+ priceAdd)
 }
 
 export const AVATAR_EMOJIS = ['♞', '♛', '♜', '♝', '🦁', '🐺', '🦊', '🐉', '🦅', '🐼', '🐯', '🦄', '🐙', '🐧', '🤖', '👾', '🧙', '🥷', '🦸', '🔥', '⚡', '🌙', '⭐', '💎'];
