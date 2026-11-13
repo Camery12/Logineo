@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-Danach im Browser **http://localhost:3000** öffnen. Für ein Testspiel gegen dich selbst öffnest du einen zweiten Browser (oder ein Inkognito-Fenster), weil jedes Fenster ein eigenes Profil hat.
+Danach im Browser **http://localhost:3000/chess/** öffnen (die Startseite **/** ist der PlayHub mit allen Spielen). Für ein Testspiel gegen dich selbst öffnest du einen zweiten Browser (oder ein Inkognito-Fenster), weil jedes Fenster ein eigenes Profil hat.
 
 Optionale Umgebungsvariablen:
 

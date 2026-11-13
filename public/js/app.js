@@ -917,7 +917,7 @@ function renderRandomCard() {
   }
 }
 
-const inviteLink = (code) => `${location.origin}/?join=${code}`;
+const inviteLink = (code) => `${location.origin}${location.pathname}?join=${code}`; // Schach liegt unter /chess/
 function renderInviteCard() {
   const el = $('#card-invite'); if (!el) return;
   if (state.room) {

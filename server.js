@@ -307,9 +307,12 @@ const app = express();
 app.use(compression({ filter: (req, res) => !req.path.startsWith('/music/') && compression.filter(req, res) }));
 // Bibliotheken ändern sich nur mit neuen Paketversionen: lange im Browser zwischenspeichern
 const LONG = { maxAge: '7d' };
-app.use('/vendor/chess.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/chess.js/dist/esm/chess.js'), LONG));
-app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules/three/build'), LONG));
-app.use('/vendor/three-jsm', express.static(path.join(__dirname, 'node_modules/three/examples/jsm'), LONG));
+// Schach liegt unter /chess/ (die Startseite / ist der Playhub); die alten Pfade bleiben für offene Tabs erreichbar
+for (const base of ['', '/chess']) {
+  app.use(base + '/vendor/chess.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/chess.js/dist/esm/chess.js'), LONG));
+  app.use(base + '/vendor/three', express.static(path.join(__dirname, 'node_modules/three/build'), LONG));
+  app.use(base + '/vendor/three-jsm', express.static(path.join(__dirname, 'node_modules/three/examples/jsm'), LONG));
+}
 
 // Profilsongs als normale Audiodatei (mit Range-Unterstützung, wichtig für iPad/Safari).
 // Läuft getrennt vom Socket – so blockiert ein großer Song nie das Laden von Profilen.
@@ -342,8 +345,14 @@ app.get('/music/:id', async (req, res) => {
   res.set('Content-Length', total);
   res.end(m.buf);
 });
-app.use(express.static(path.join(__dirname, 'public')));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+const PUBLIC = path.join(__dirname, 'public');
+app.get('/chess', (req, res, next) => { const [p, q] = req.originalUrl.split('?'); if (p.endsWith('/')) return next(); res.redirect(301, '/chess/' + (q ? '?' + q : '')); });
+app.use('/chess', express.static(PUBLIC));
+app.get('/chess/*', (req, res) => res.sendFile(path.join(PUBLIC, 'index.html')));
+// Playhub-Startseite; alte Einladungslinks (/?join=…) gehen direkt zum Schach
+app.get('/', (req, res) => (req.query.join ? res.redirect(302, `/chess/?join=${encodeURIComponent(String(req.query.join))}`) : res.sendFile(path.join(PUBLIC, 'hub.html'))));
+app.use(express.static(PUBLIC, { index: false })); // Symbole & alte Pfade
+app.get('*', (req, res) => res.redirect(302, '/'));
 
 const server = http.createServer(app);
 // schnellere Erkennung von Verbindungsabbrüchen (z. B. iPad-Tab im Hintergrund)
