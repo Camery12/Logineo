@@ -1257,3 +1257,12 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .nav, .topbar { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 @media (max-width: 1440px) { .nav { background: rgb(11, 13, 20) !important; } }
 .topbar { background: rgb(11, 13, 20); }
+
+/* Breite Fenster (1441–2099 px): 9 Tabs passen nicht nebeneinander – kompakt mit Symbol über dem Text */
+@media (min-width: 1441px) and (max-width: 2099px) {
+  .nav { gap: 2px; margin-left: 10px; }
+  .nav button { flex-direction: column; gap: 2px; padding: 6px 10px; font-size: 11.5px; line-height: 1.1; }
+  .nav .ni { font-size: 18px; }
+}
+.top-right { flex-shrink: 0; white-space: nowrap; }
+.online-pill, .coin-pill, .me-btn { white-space: nowrap; }
