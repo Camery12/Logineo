@@ -1334,7 +1334,7 @@ function renderFourCard() {
   } else if (state.fourSearch?.searching) {
     // Zufalls-Suche läuft
     const q = state.fourSearch;
-    el.innerHTML = `<div class="four-head"><div class="ic">🎲</div><div><h3>Suche Mitspieler … <span class="tag">${q.teams ? '🤝 2 vs 2' : '👥 Jeder gegen jeden'} · ⏱️ ${timeLabel(q.timeMs)}</span></h3>
+    el.innerHTML = `<div class="four-head"><div class="ic">🎲</div><div><h3>Suche Mitspieler … <span class="tag">${q.teams ? '🤝 2 vs 2' : '👥 Jeder gegen jeden'}</span></h3>
       <p id="fq-info"></p></div></div>
       <div class="fq-seats">${[0, 1, 2, 3].map((i) => { const p = q.players?.[i]; return p ? `<div class="seat on">${avatar(p.avatar, 34)}<b>${esc(p.name)}</b>${p.id === me ? '<span class="tag">Du</span>' : ''}</div>` : '<div class="seat searching-seat"><span class="spinner"></span><span class="muted">sucht …</span></div>'; }).join('')}</div>
       <div class="room-actions four-actions-row"><button class="btn danger" id="fq-cancel">✕ Suche abbrechen</button></div>`;
@@ -1342,7 +1342,7 @@ function renderFourCard() {
       const box = $('#fq-info'); if (!box || !state.fourSearch?.searching) return clearInterval(state.fqTimer);
       const s = Math.floor((Date.now() - q.since) / 1000), wait = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
       const fill = q.fillAt ? Math.max(0, Math.ceil((q.fillAt - Date.now()) / 1000)) : null;
-      box.innerHTML = `<b>${q.count || 1}/4</b> Spieler gefunden · Wartezeit ${wait}${fill != null ? ` · ${fill ? `in <b>${fill} s</b> wird mit Bots aufgefüllt` : 'startet gleich mit Bots …'}` : ' · sobald ein zweiter Spieler da ist, wird nach 40 s mit Bots aufgefüllt'}`;
+      box.innerHTML = `<b>${q.count || 1}/4</b> Spieler gefunden · Wartezeit ${wait}${fill != null ? ` · ${fill ? `in <b>${fill} s</b> wird mit Bots aufgefüllt` : 'startet gleich mit Bots …'}` : ' · sobald ein zweiter Spieler da ist, wird nach 25 s mit Bots aufgefüllt'}<br><small class="muted">Alle Freien in der Lobby wurden eingeladen. Bedenkzeit: die, die die meisten gewählt haben (du: ${timeLabel(q.timeMs)}).</small>`;
     };
     clearInterval(state.fqTimer); info(); state.fqTimer = setInterval(info, 500);
     $('#fq-cancel').onclick = () => { socket.emit('four:unqueue'); state.fourSearch = null; renderFourCard(); };
@@ -1374,6 +1374,20 @@ function renderFourCard() {
     };
   }
 }
+// Jemand sucht 2v2/4er – mitmachen?
+socket.on('four:invite', ({ teams, count, by }) => {
+  if (isBusy() || state.fourSearch?.searching || state.fourLobby) return;
+  sound.notify();
+  notify({ avatarObj: by.avatar, title: `${esc(by.name)} sucht ${teams ? 'ein 2 vs 2' : 'ein 4er-Schach'}`, text: `${count}/4 Spieler – mach mit!`, timeout: 20000,
+    actions: [{ label: '🎲 Mitmachen', cls: 'good', onClick: async () => {
+      const t = state.fourTime || 300000;
+      const r = await emit('four:queue', { timeMs: t, teams });
+      if (r.error) return toast(esc(r.error), 'warn');
+      state.fourMode = teams ? 'teams' : 'ffa';
+      state.fourSearch = { searching: true, teams, timeMs: t, since: Date.now(), count: count + 1, players: [state.profile] };
+      go('play'); setTimeout(() => $('#card-four')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+    } }] });
+});
 socket.on('four:queue', (q) => {
   const before = state.fourSearch?.count || 0;
   state.fourSearch = q.searching ? q : null;

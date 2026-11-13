@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.22.1';
+export const VERSION = '1.22.2';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.22.2', 'Besseres Matchmaking für 2 vs 2 und 4er: Bedenkzeit trennt die Suche nicht mehr (es gilt die häufigste), Auffüllen mit Bots schon nach 25 Sekunden, und freie Spieler in der Lobby bekommen eine Einladung zum Mitmachen'],
   ['1.22.1', '4er-Schach und 2 vs 2 überstehen jetzt Updates: Das Spiel wird gespeichert und geht nach dem Neuladen weiter. Bei Verbindungsabbruch bleibt die Uhr stehen statt abzulaufen'],
   ['1.22.0', 'Zufalls-Suche für 2 vs 2 und 4er-Schach: „Zufällige Mitspieler“ findet Leute mit gleichem Modus und gleicher Bedenkzeit – bei 4 Spielern geht es sofort los, sonst wird nach 40 Sekunden mit Bots aufgefüllt'],
   ['1.21.1', 'Figuren wieder gestochen scharf, besonders auf iPhone und iPad (höhere Auflösung, Safari-Fix)'],

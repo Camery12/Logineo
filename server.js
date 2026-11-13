@@ -545,10 +545,26 @@ function fourBusy(uid) {
   return false;
 }
 // ---------------------------------------------------------------- Zufalls-Suche für 2 vs 2 / 4er-Schach
-// Gleicher Modus + gleiche Bedenkzeit. 4 Spieler -> Start. Nach FOUR_FILL_MS mit mind. 2 Spielern: Rest mit Bots auffüllen.
-const FOUR_FILL_MS = 40_000;
+// Gleicher Modus (Bedenkzeit egal – gespielt wird die häufigste). 4 Spieler -> Start. Nach FOUR_FILL_MS mit mind. 2 Spielern: Rest mit Bots.
+const FOUR_FILL_MS = 25_000, FOUR_INVITE_GAP = 120_000;
+const fourInvited = new Map(); // userId -> Zeitpunkt der letzten Einladung
 let fourQueue = []; // [{ uid, teams, timeMs, since }]
-const fqKey = (q) => `${q.teams ? 't' : 'f'}:${q.timeMs}`;
+const fqKey = (q) => (q.teams ? 't' : 'f');
+// häufigste Bedenkzeit der Gruppe (bei Gleichstand die des am längsten Wartenden)
+function groupTime(list) {
+  const n = {}; for (const q of list) n[q.timeMs] = (n[q.timeMs] || 0) + 1;
+  return list.reduce((best, q) => (n[q.timeMs] > n[best] ? q.timeMs : best), list[0].timeMs);
+}
+// Freie Spieler in der Lobby auf die Suche hinweisen
+function inviteToFour(by, teams, count) {
+  const now = Date.now();
+  for (const [uid] of online) {
+    if (uid === by.id || userGame.has(uid) || userFour.has(uid) || fourBusy(uid) || queue.some((q) => q.userId === uid)) continue;
+    if (now - (fourInvited.get(uid) || 0) < FOUR_INVITE_GAP || banInfo(db.users[uid])) continue;
+    fourInvited.set(uid, now);
+    emitTo(uid, 'four:invite', { teams, count, by: pub(by) });
+  }
+}
 function fourQueueState() {
   for (const q of fourQueue) {
     const same = fourQueue.filter((x) => fqKey(x) === fqKey(q));
@@ -569,7 +585,7 @@ function tryFourMatch() {
   for (const list of groups.values()) {
     list.sort((a, b) => a.since - b.since);
     while (list.length >= 4 || (list.length >= 2 && Date.now() - list[0].since >= FOUR_FILL_MS)) {
-      const take = list.splice(0, 4), ids = take.map((q) => q.uid), { teams, timeMs } = take[0];
+      const take = list.splice(0, 4), ids = take.map((q) => q.uid), { teams } = take[0], timeMs = groupTime(take);
       fourQueue = fourQueue.filter((q) => !ids.includes(q.uid));
       // Teams zufällig, aber ausgeglichen (bei 2 Menschen: einer pro Team, Bots als Partner)
       const side = {}; shuffle([...ids]).forEach((id, i) => { side[id] = i % 2; });
@@ -1626,6 +1642,8 @@ io.on('connection', (socket) => {
     fourQueue.push({ uid: user.id, teams: !!teams, timeMs: fourTime(timeMs), since: Date.now() });
     ack?.({ ok: true });
     tryFourMatch(); broadcastStats();
+    const n = fourQueue.filter((q) => q.teams === !!teams).length;
+    if (n > 0 && n < 4) inviteToFour(user, !!teams, n);
   }));
   socket.on('four:unqueue', need(() => leaveFourQueue(user.id, true)));
   socket.on('four:leave', need(() => {
