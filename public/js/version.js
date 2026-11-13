@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.19.3';
+export const VERSION = '1.19.4';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.19.4', 'Logo auf der Website wieder ♞ SchachArena – nur der Browser-Tab heißt „Meine Kurse“ mit orangem m'],
   ['1.19.3', 'Symbol jetzt ein oranges kleines m mit durchsichtigem Hintergrund'],
   ['1.19.2', 'Symbol jetzt ein gelbes kleines m mit durchsichtigem Hintergrund'],
   ['1.19.1', 'Neuer Name „Meine Kurse“ und neues Symbol: oranges kleines m (Tab, Homescreen und Logo)'],
