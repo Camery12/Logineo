@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.26.0';
+export const VERSION = '1.26.1';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.26.1', 'Zurück-Knopf zum PlayHub oben links'],
   ['1.26.0', 'Schach liegt jetzt unter logineo.club/chess/ – die Startseite logineo.club ist der neue PlayHub. Alte Links und Einladungen leiten automatisch weiter'],
   ['1.25.2', 'Profilsong: OGG-Dateien (und andere Formate) werden jetzt immer erkannt – auch wenn der Browser sie als Video oder unbekannt meldet. Neu erlaubt: FLAC'],
   ['1.25.1', 'Profilsong jetzt bis 5 MB (vorher 3 MB)'],

@@ -1310,3 +1310,8 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .tr-badge { margin-left: auto; }
 .tr-recent summary { cursor: pointer; padding: 4px 8px; }
 @media (max-width: 700px) { .tr-cols { grid-template-columns: 1fr; } .tr-arrow { justify-self: center; transform: rotate(90deg); } }
+
+/* Zurück zum PlayHub */
+.hub-back { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; padding: 7px 12px; border-radius: 999px; background: rgba(255, 255, 255, .06); border: 1px solid var(--line); color: var(--muted); font-weight: 700; font-size: 13px; text-decoration: none; white-space: nowrap; flex: none; transition: .15s; }
+.hub-back:hover { color: var(--text); background: rgba(124, 92, 255, .18); border-color: rgba(124, 92, 255, .5); }
+@media (max-width: 1100px) { .hub-back span { display: none; } .hub-back { padding: 7px 10px; margin-right: 8px; } }
