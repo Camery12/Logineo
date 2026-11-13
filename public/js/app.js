@@ -12,6 +12,7 @@ import { FourBoard } from './fourboard.js';
 import { COLOR_NAMES, COLOR_HEX, TEAM_NAMES } from './four.js';
 import { pieceURL4 } from './pieces.js';
 import * as AX from './admin-extra.js';
+import { renderCasino } from './casino.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -65,7 +66,7 @@ function openOverlay(content, { closable = true, wide = false, onClose = null } 
 }
 
 const REASONS = {
-  checkmate: 'durch Schachmatt', resign: 'durch Aufgabe', timeout: 'auf Zeit', abandon: 'automatisch aufgegeben (3 Min. ohne Verbindung)',
+  checkmate: 'durch Schachmatt', resign: 'durch Aufgabe', timeout: 'auf Zeit', abandon: 'automatisch aufgegeben (1 Min. ohne Verbindung)',
   stalemate: 'durch Patt', insufficient: 'ungenügendes Material', repetition: 'dreifache Stellungswiederholung',
   fifty: '50-Züge-Regel', agreement: 'Remis vereinbart', draw: 'Remis', 'four-win': '4er-Schach · 1. Platz', 'four-place': '4er-Schach',
   'team-win': '2 vs 2 · Team-Sieg', 'team-loss': '2 vs 2',
@@ -683,7 +684,7 @@ function animateNumber(el, from, to) {
 
 // ================================================================ Navigation
 function go(view) {
-  if (!['play', 'bots', 'shop', 'inventory', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin', 'replays'].includes(view)) view = 'play';
+  if (!['play', 'bots', 'shop', 'inventory', 'leaderboard', 'profile', 'game', 'four', 'friends', 'admin', 'replays', 'casino'].includes(view)) view = 'play';
   if (view === 'admin' && !state.profile?.admin) view = 'play';
   if (view === 'game' && !state.game && !state.bot) view = 'play';
   if (view === 'four' && !state.four) view = 'play';
@@ -704,6 +705,7 @@ function go(view) {
   if (view === 'admin') renderAdmin(state.adminTab || 'overview');
   if (view === 'leaderboard') renderLeaderboard();
   if (view === 'replays') renderReplays();
+  if (view === 'casino') renderCasino($('#view-casino'), { emit, $, $$, esc, toast, fmtNum, setProfile, state, sound, confetti });
   if (view === 'play') renderPlay();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -2075,7 +2077,7 @@ function showResult({ outcome, reason, coins, rating, online, bot, training = fa
     // Gegner hat das Spiel verlassen: keine Wertung für den, der bleibt
     sound.notify();
     const ov = openOverlay(`<div class="result-head draw"><div class="result-icon">🚪</div><h2>Gegner weg</h2>
-      <p class="muted">Dein Gegner war 3 Minuten ohne Verbindung und hat automatisch aufgegeben. Er verliert dafür Elo – für dich ändert sich nichts.</p></div>
+      <p class="muted">Dein Gegner war 1 Minute ohne Verbindung und hat automatisch aufgegeben. Er verliert dafür Elo – für dich ändert sich nichts.</p></div>
       <div class="modal-actions"><button class="btn" data-r="lobby">Zur Lobby</button><button class="btn primary" data-r="again">⚡ Neues Match</button></div>`);
     $$('[data-r]', ov.el).forEach((b) => b.onclick = () => { ov.close(); go('play'); if (b.dataset.r === 'again') $('#search-btn')?.click(); });
     return;

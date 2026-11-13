@@ -1190,3 +1190,65 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .fq-seats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .searching-seat { justify-content: center; gap: 8px; }
 @media (max-width: 700px) { .fq-seats { grid-template-columns: 1fr 1fr; } }
+
+/* ================================================================ Casino */
+.casino-card { margin-top: 16px; padding: 22px; background: radial-gradient(120% 90% at 50% 0%, #0f5132 0%, #0a3322 55%, #071f16 100%); box-shadow: inset 0 0 0 2px rgba(255, 215, 120, .25), var(--shadow); }
+.casino-card.shake { animation: shakeS .35s; }
+.cs-stats { text-align: center; margin-top: 10px; }
+.cs-controls { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: center; gap: 10px; margin-top: 18px; }
+.cs-controls .btn { min-width: 130px; }
+.cs-go { padding: 12px 22px; font-size: 16px; }
+.cs-bet { display: grid; gap: 4px; }
+.cs-bet label, .cs-lab { font-size: 12px; color: rgba(255, 255, 255, .7); }
+.cs-bet-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cs-bet-row input { width: 110px; padding: 9px 10px; border-radius: 10px; background: rgba(0, 0, 0, .35); border: 1px solid rgba(255, 255, 255, .15); color: #fff; font-weight: 700; font-size: 16px; }
+.cs-bet-row .btn { min-width: 0; }
+.bj-result { margin: 8px auto 0; padding: 10px 16px; border-radius: 12px; font-weight: 800; font-size: 18px; text-align: center; background: rgba(0, 0, 0, .3); width: fit-content; animation: pop .3s; }
+.bj-result span { color: #ffd54a; }
+.bj-result.win { color: #6ee7a8; } .bj-result.loss { color: #ff8a9a; } .bj-result.draw { color: #fde68a; }
+/* Blackjack */
+.bj-table { display: grid; gap: 14px; justify-items: center; min-height: 330px; }
+.bj-hand { display: grid; justify-items: center; gap: 8px; }
+.bj-label { font-weight: 700; color: rgba(255, 255, 255, .85); display: flex; gap: 8px; align-items: center; }
+.bj-val { min-width: 30px; padding: 2px 8px; border-radius: 99px; background: rgba(0, 0, 0, .35); text-align: center; }
+.bj-cards { display: flex; gap: 0; min-height: 112px; }
+.bj-cards .pcard + .pcard { margin-left: -26px; }
+.bj-mid { min-height: 48px; display: grid; place-items: center; text-align: center; }
+.pcard { position: relative; width: 78px; height: 110px; border-radius: 10px; background: linear-gradient(160deg, #fff, #eceff4); color: #111827; box-shadow: 0 6px 14px rgba(0, 0, 0, .45); display: grid; place-items: center; animation: dealIn .35s ease-out both; animation-delay: calc(var(--d) * 90ms); }
+.pcard.red { color: #dc2626; }
+.pcard i { font-style: normal; font-size: 34px; }
+.pcard b { position: absolute; top: 6px; left: 8px; font-size: 17px; line-height: 1; }
+.pcard b.bot { top: auto; left: auto; bottom: 6px; right: 8px; transform: rotate(180deg); }
+.pcard.back { background: repeating-linear-gradient(45deg, #7c1d2b 0 6px, #9f2a3b 6px 12px); box-shadow: inset 0 0 0 4px #fff, 0 6px 14px rgba(0, 0, 0, .45); }
+.pcard.ghost { opacity: .18; animation: none; }
+@keyframes dealIn { from { opacity: 0; transform: translateY(-40px) rotate(-8deg) scale(.9); } }
+/* Mines */
+.mines-wrap { display: grid; grid-template-columns: 300px 1fr; gap: 22px; align-items: start; }
+.mines-side { display: grid; gap: 12px; }
+.mines-side input[type=range] { width: 100%; accent-color: #ffd54a; }
+.mines-info { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mines-info > div { display: grid; padding: 8px 10px; border-radius: 10px; background: rgba(0, 0, 0, .3); }
+.mines-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; max-width: 460px; width: 100%; justify-self: center; }
+.mine { aspect-ratio: 1; border-radius: 12px; background: linear-gradient(160deg, #2e4a63, #1c2f42); box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .35), 0 3px 8px rgba(0, 0, 0, .35); font-size: clamp(20px, 4vw, 30px); transition: transform .12s, background .2s; }
+.mines-grid.live .mine:not([disabled]):hover { transform: translateY(-2px); background: linear-gradient(160deg, #3a5d7c, #24394f); }
+.mine.safe { background: linear-gradient(160deg, #1f8f5a, #12643f); animation: pop .25s; }
+.mine.bomb { background: linear-gradient(160deg, #6b1d2a, #3d0f17); }
+.mine.hit { background: linear-gradient(160deg, #ff3b5c, #b3132f); animation: pop .3s; }
+.mine.dim { opacity: .45; }
+@media (max-width: 760px) { .mines-wrap { grid-template-columns: 1fr; } }
+/* Roulette */
+.rl-wrap { position: relative; overflow: hidden; height: 84px; border-radius: 14px; background: rgba(0, 0, 0, .35); box-shadow: inset 0 0 0 2px rgba(255, 215, 120, .3); -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent); mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent); }
+.rl-strip { display: flex; height: 100%; will-change: transform; }
+.rl-slot { flex: none; width: 68px; margin: 8px 2px; border-radius: 10px; display: grid; place-items: center; font-weight: 900; font-size: 22px; color: #fff; }
+.rl-slot.red, .rl-dot.red, .rl-bet.red { background: linear-gradient(160deg, #ef4444, #b91c1c); }
+.rl-slot.black, .rl-dot.black, .rl-bet.black { background: linear-gradient(160deg, #3f3f46, #18181b); }
+.rl-slot.green, .rl-dot.green, .rl-bet.green { background: linear-gradient(160deg, #22c55e, #15803d); }
+.rl-pointer { position: absolute; z-index: 2; left: 50%; top: 0; bottom: 0; width: 4px; margin-left: -2px; background: #ffd54a; box-shadow: 0 0 12px #ffd54a; border-radius: 2px; }
+.rl-hist { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; margin: 12px 0; }
+.rl-dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; }
+.rl-bets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 560px; margin: 0 auto; }
+.rl-bet { display: grid; padding: 12px; border-radius: 14px; color: #fff; text-align: center; opacity: .7; border: 3px solid transparent; transition: .15s; }
+.rl-bet b { font-size: 18px; } .rl-bet span { font-size: 22px; font-weight: 900; } .rl-bet small { opacity: .8; }
+.rl-bet.on { opacity: 1; border-color: #ffd54a; transform: translateY(-2px); box-shadow: 0 0 18px rgba(255, 213, 74, .5); }
+/* 9 Tabs unten auf dem Handy */
+@media (max-width: 760px) { .nav button { font-size: 9px; padding: 6px 1px; } .nav .ni { font-size: 18px; } }

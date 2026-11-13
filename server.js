@@ -12,12 +12,14 @@ import { checkUsername, badWord, badChat } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
 import { setupAdmin } from './server-admin.js';
+import { setupCasino } from './server-casino.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'db.json');
 const VOTE_MS = 12000;
-const RECONNECT_MS = Number(process.env.RECONNECT_MS) || 180_000; // 3 Minuten ohne Verbindung -> automatisch aufgegeben (Spiel ist so lange pausiert)
+const RECONNECT_MS = Number(process.env.RECONNECT_MS) || 60_000; // 1 Minute ohne Verbindung -> automatisch aufgegeben (Spiel ist so lange pausiert)
+const LEAVE_LIMIT = 3, LEAVE_BAN_MS = 12 * 3600_000; // 3× an einem Tag ein Spiel durch Disconnect verlassen -> 12 Std. gesperrt
 const LAG_MS = 14_000;        // so lange ohne Lebenszeichen gilt eine Verbindung als hängend
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const VARIANTS = { queens: 'qqqqkqqq/qqqqqqqq/8/8/8/8/QQQQQQQQ/QQQQKQQQ w - - 0 1' }; // Queen-Modus: alles Damen außer den Königen
@@ -120,6 +122,23 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   });
 }
 
+// Spiel durch Verbindungsabbruch verlassen: zählen, ab 3× in 24 Std. -> 12 Std. Sperre
+function countLeave(uid) {
+  const u = db.users[uid]; if (!u || shuttingDown) return;
+  const now = Date.now();
+  u.leaves = [...(u.leaves || []).filter((t) => now - t < 24 * 3600_000), now];
+  const n = u.leaves.length;
+  if (n >= LEAVE_LIMIT && !banInfo(u)) {
+    u.ban = { until: now + LEAVE_BAN_MS, reason: `Spiele ${n}× an einem Tag durch Disconnect verlassen`, by: 'System', at: now };
+    u.leaves = [];
+    emitTo(uid, 'banned', banInfo(u));
+    adminApi.log(null, 'ban', u, `Automatisch 12 Std. gesperrt: ${n}× Disconnect an einem Tag`);
+  } else if (n < LEAVE_LIMIT) {
+    emitTo(uid, 'toast', { type: 'warn', text: `⚠️ Du hast ein Spiel durch Verbindungsabbruch verlassen (${n}/${LEAVE_LIMIT} heute). Beim ${LEAVE_LIMIT}. Mal wirst du 12 Stunden gesperrt.` });
+    u.leaveWarn = n; // wird beim nächsten Verbinden angezeigt, falls er gerade offline ist
+  }
+  save();
+}
 let shuttingDown = false; // während eines Updates niemanden wegen Verbindungsabbruch rauswerfen
 const byToken = new Map();
 const byCode = new Map();
@@ -987,6 +1006,7 @@ async function onAbsent(g, uid) {
     return;
   }
   endGame(g, g.players.w === uid ? 'b' : 'w', 'abandon');
+  if (!g.restored) countLeave(uid); // nach einem Update zählt es nicht
 }
 
 // Verbindung weg: Spiel pausieren, Uhr anhalten
@@ -1246,6 +1266,8 @@ const adminApi = setupAdmin({
   getQueue: () => queue, setQueue: (q) => { queue = q; broadcastStats(); },
 });
 
+const casino = setupCasino({ save, priv, io });
+
 io.on('connection', (socket) => {
   let user = null;
   // letztes Lebenszeichen (auch Ping-Antworten) – für faire Uhr bei Verbindungsabbruch
@@ -1262,6 +1284,7 @@ io.on('connection', (socket) => {
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
     adminApi.onConnect(socket, user);
+    if (user.leaveWarn) { const n = user.leaveWarn; delete user.leaveWarn; setTimeout(() => socket.emit('toast', { type: 'warn', text: `⚠️ Du hast ein Spiel durch Verbindungsabbruch verlassen (${n}/${LEAVE_LIMIT} heute). Beim ${LEAVE_LIMIT}. Mal wirst du 12 Stunden gesperrt.` }), 1500); }
     ack?.({ settings: adminApi.publicSettings(), token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, fourId: userFour.get(user.id) || null, social: socialSummary(user), ban: banInfo(user) });
     notifyFriends(user, true);
     // Laufendes 4er-Spiel fortsetzen
@@ -1376,6 +1399,7 @@ io.on('connection', (socket) => {
   // --- Profil eines anderen Spielers ansehen
   // --- Admin-Menü: Spieler suchen und Münzen geben/abziehen (nur für Admins, Server prüft jedes Mal)
   adminApi.register(socket, () => user, need);
+  casino.register(socket, () => user, need);
   socket.on('admin:find', need(({ query } = {}, ack) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
     const t = findTarget(query);
@@ -2078,7 +2102,7 @@ io.on('connection', (socket) => {
     const g4 = fourGameOf(user.id);
     if (g4 && g4.status === 'playing' && g4.state.alive[fourColorOf(g4, user.id)]) {
       const uid = user.id;
-      if (!shuttingDown) g4.disconnect[uid] = setTimeout(() => fourEliminate(g4, fourColorOf(g4, uid), 'abandon'), FOUR_ABANDON_MS);
+      if (!shuttingDown) g4.disconnect[uid] = setTimeout(() => { fourEliminate(g4, fourColorOf(g4, uid), 'abandon'); countLeave(uid); }, FOUR_ABANDON_MS);
       fourBroadcast(g4, 'four:state', { events: [{ type: 'offline', color: fourColorOf(g4, uid), until: Date.now() + FOUR_ABANDON_MS }] });
     }
     const g = games.get(userGame.get(user.id));
