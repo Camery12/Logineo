@@ -112,6 +112,7 @@ async function flush() {
 // Render beendet den alten Server bei jedem Update mit SIGTERM: vorher alles speichern
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
+    shuttingDown = true;
     try { io.emit('server:restarting'); } catch { /* egal */ }
     try { await persistAllGames(); } catch (e) { console.error('Partien konnten nicht gespeichert werden:', e.message); }
     try { await flush(); } catch { /* egal */ }
@@ -119,6 +120,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   });
 }
 
+let shuttingDown = false; // während eines Updates niemanden wegen Verbindungsabbruch rauswerfen
 const byToken = new Map();
 const byCode = new Map();
 
@@ -648,6 +650,7 @@ function startFour(humanIds, timeMs, { teams = false, side = {} } = {}) {
     for (const [code, r] of rooms) if (r.hostId === uid) rooms.delete(code);
   }
   fourBroadcast(g, 'four:start');
+  persistFour(g);
   scheduleFourBot(g);
   broadcastStats();
   return g;
@@ -707,6 +710,7 @@ function fourAfterMove(g, color, res) {
   g.quiet = res.events.some((e) => e.type === 'capture') ? 0 : (g.quiet || 0) + 1;
   if (g.quiet >= FOUR_QUIET && !g.state.over) { fourByMaterial(g); res.events.push({ type: 'points' }); }
   fourBroadcast(g, 'four:state', { events: res.events, move: { from: res.move.from, to: res.move.to, color } });
+  persistFour(g);
   if (g.state.over) return endFour(g);
   if (!fourHumansAlive(g)) return fourFastForward(g);
   scheduleFourBot(g);
@@ -724,6 +728,7 @@ function fourEliminate(g, color, reason) {
   Four.settle(g.state, events);
   clearTimeout(g.disconnect[g.players[color].uid]);
   fourBroadcast(g, 'four:state', { events });
+  persistFour(g);
   if (g.state.over) return endFour(g);
   if (!fourHumansAlive(g)) return fourFastForward(g);
   scheduleFourBot(g);
@@ -732,6 +737,7 @@ function fourEliminate(g, color, reason) {
 function endFour(g) {
   if (g.status === 'over') return;
   g.status = 'over';
+  unpersistGame(g);
   clearTimeout(g.botTimer);
   for (const t of Object.values(g.disconnect)) clearTimeout(t);
   const teams = !!g.state.teams;
@@ -846,8 +852,60 @@ function unpersistGame(g) {
 }
 async function persistAllGames() {
   const list = [...games.values()].filter((g) => g.status === 'playing');
-  await Promise.all(list.map((g) => persistGame(g)));
-  if (list.length) console.log(`♻️ ${list.length} laufende Partie(n) gespeichert`);
+  const list4 = [...games4.values()].filter((g) => g.status === 'playing');
+  await Promise.all([...list.map((g) => persistGame(g)), ...list4.map((g) => persistFour(g))]);
+  if (list.length + list4.length) console.log(`♻️ ${list.length} Partie(n) und ${list4.length} 4er/2v2-Spiel(e) gespeichert`);
+}
+
+// ---------------------------------------------------------------- 4er/2v2-Spiele überstehen Updates (gleiches Prinzip wie oben)
+function snapshot4(g) {
+  return JSON.parse(JSON.stringify({
+    kind: 'four', id: g.id, uids: g.players.filter((p) => p.uid).map((p) => p.uid), players: g.players, state: g.state, timeMs: g.timeMs,
+    clock: fourClock(g), humans: g.humans, moves: g.moves, log: g.log || [], quiet: g.quiet || 0, owner: INSTANCE, updatedAt: Date.now(),
+  }));
+}
+function persistFour(g) {
+  if (g.status !== 'playing' || g.lost) return g.persist;
+  const doc = snapshot4(g);
+  g.persist = (g.persist || Promise.resolve()).then(async () => {
+    if (g.lost) return;
+    if (!mongoGames) { db.games ||= {}; db.games[g.id] = doc; save(); return; }
+    try { await mongoGames.replaceOne({ id: g.id, owner: INSTANCE }, doc, { upsert: true }); }
+    catch (e) { if (e.code === 11000) lostFour(g); else console.error('4er-Spiel speichern:', e.message); }
+  });
+  return g.persist;
+}
+// Spiel läuft schon auf dem neuen Server: hier vergessen, Spieler neu verbinden lassen
+function lostFour(g) {
+  if (g.lost) return;
+  g.lost = true; g.status = 'over';
+  clearTimeout(g.botTimer);
+  for (const t of Object.values(g.disconnect)) clearTimeout(t);
+  for (const p of g.players) if (p.uid) { if (userFour.get(p.uid) === g.id) userFour.delete(p.uid); emitTo(p.uid, 'server:reconnect'); }
+  games4.delete(g.id);
+  console.log('↪️ 4er-Spiel wurde von einem neuen Server übernommen:', g.id);
+}
+async function adoptFour(d, drop, uid) {
+  if (Date.now() - d.updatedAt > 6 * 3600_000 || games4.has(d.id) || d.owner === INSTANCE) return drop();
+  if (d.uids.some((id) => !db.users[id] || userFour.has(id) || userGame.has(id))) return;
+  if (mongoGames) {
+    const r = await mongoGames.replaceOne({ id: d.id, owner: d.owner }, { ...d, owner: INSTANCE, updatedAt: Date.now() });
+    if (!r?.matchedCount) return; // jemand anderes war schneller
+  } else db.games[d.id] = { ...d, owner: INSTANCE };
+  if (games4.has(d.id) || d.uids.some((id) => userFour.has(id))) return;
+  const g = {
+    id: d.id, state: d.state, timeMs: d.timeMs, clock: d.clock.map((c) => Math.max(1000, c)), lastTick: Date.now(), status: 'playing',
+    disconnect: {}, moves: d.moves, humans: d.humans, players: d.players, log: d.log || [], quiet: d.quiet || 0, restored: true,
+  };
+  games4.set(g.id, g);
+  for (const id of d.uids) {
+    userFour.set(id, g.id);
+    const c = fourColorOf(g, id);
+    // wer noch nicht zurück ist, hat nach dem Update etwas mehr Zeit
+    if (id !== uid && !online.has(id) && g.state.alive[c]) g.disconnect[id] = setTimeout(() => fourEliminate(g, c, 'abandon'), RESTORE_MS);
+  }
+  scheduleFourBot(g);
+  console.log('♻️ 4er-Spiel nach Update übernommen:', g.id);
 }
 // Gehört die Partie noch diesem Server? (Nach einem Update evtl. schon vom neuen übernommen)
 async function stillMine(g) {
@@ -867,11 +925,12 @@ function lostGame(g) {
 
 // Nach einem Update: laufende Partie dieses Spielers aus der Datenbank übernehmen
 async function adoptGameFor(uid) {
-  if (userGame.has(uid)) return;
+  if (userGame.has(uid) || userFour.has(uid)) return;
   let doc = mongoGames ? await mongoGames.findOne({ uids: uid }) : Object.values(db.games || {}).find((d) => d.uids?.includes(uid));
   if (!doc) return;
   const { _id, ...d } = doc;
   const drop = async () => { if (mongoGames) await mongoGames.deleteOne({ id: d.id, owner: d.owner }).catch(() => {}); else { delete db.games[d.id]; save(); } };
+  if (d.kind === 'four') return adoptFour(d, drop, uid);
   if (Date.now() - d.updatedAt > 6 * 3600_000 || games.has(d.id) || d.owner === INSTANCE) return drop(); // alt oder schon beendet
   const { w, b } = d.players;
   if (!db.users[w] || !db.users[b] || userGame.has(w) || userGame.has(b)) return;
@@ -1149,6 +1208,7 @@ function abortGame(g) {
 }
 function abortFour(g) {
   g.status = 'over';
+  unpersistGame(g);
   clearTimeout(g.botTimer);
   for (const t of Object.values(g.disconnect)) clearTimeout(t);
   for (const p of g.players) if (p.uid) { emitTo(p.uid, 'toast', { type: 'warn', text: 'Das Spiel wurde von einem Admin abgebrochen (ohne Wertung).' }); emitTo(p.uid, 'four:lobby', { closed: true, started: true }); if (userFour.get(p.uid) === g.id) userFour.delete(p.uid); }
@@ -1186,7 +1246,7 @@ io.on('connection', (socket) => {
     if (old && old.id !== socket.id) { old.emit('session:replaced'); old.disconnect(true); }
     online.set(user.id, socket);
     adminApi.onConnect(socket, user);
-    ack?.({ settings: adminApi.publicSettings(), token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, social: socialSummary(user), ban: banInfo(user) });
+    ack?.({ settings: adminApi.publicSettings(), token: user.token, profile: priv(user), version: VERSION, gameId: userGame.get(user.id) || null, fourId: userFour.get(user.id) || null, social: socialSummary(user), ban: banInfo(user) });
     notifyFriends(user, true);
     // Laufendes 4er-Spiel fortsetzen
     const g4 = fourGameOf(user.id);
@@ -2000,7 +2060,7 @@ io.on('connection', (socket) => {
     const g4 = fourGameOf(user.id);
     if (g4 && g4.status === 'playing' && g4.state.alive[fourColorOf(g4, user.id)]) {
       const uid = user.id;
-      g4.disconnect[uid] = setTimeout(() => fourEliminate(g4, fourColorOf(g4, uid), 'abandon'), FOUR_ABANDON_MS);
+      if (!shuttingDown) g4.disconnect[uid] = setTimeout(() => fourEliminate(g4, fourColorOf(g4, uid), 'abandon'), FOUR_ABANDON_MS);
       fourBroadcast(g4, 'four:state', { events: [{ type: 'offline', color: fourColorOf(g4, uid), until: Date.now() + FOUR_ABANDON_MS }] });
     }
     const g = games.get(userGame.get(user.id));

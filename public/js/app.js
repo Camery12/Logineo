@@ -102,11 +102,19 @@ socket.on('connect', async () => {
     state.game.active = false; clearInterval(state.oppTimer); setBanner(''); renderOnline();
     toast('Die Partie konnte nach dem Neustart leider nicht fortgesetzt werden.', 'warn');
   }
+  // Laufendes 4er/2v2-Spiel gibt es auf dem Server nicht mehr: nicht hängen bleiben
+  if (state.four && state.four.status === 'playing' && r.fourId !== state.four.id) {
+    clearInterval(fourTimer); state.four = null;
+    if (state.view === 'four') go('play');
+    notify({ icon: '⚠️', title: '4er-Spiel konnte nicht fortgesetzt werden', text: 'Die Verbindung zum Spiel ist nach einem Update verloren gegangen. Es wird nicht gewertet.', timeout: 12000 });
+  }
   if (r.version && r.version !== VERSION) { state.updateTo = r.version; checkUpdate(); }
 });
 // Partie läuft inzwischen auf dem neuen Server: neu verbinden
 socket.on('server:reconnect', () => { state.restarting = true; socket.disconnect(); setTimeout(() => socket.connect(), 400); });
 socket.on('disconnect', () => {
+  // 4er/2v2: Uhren einfrieren, bis der Server wieder da ist (er hält sie in der Zeit auch an)
+  if (state.four?.status === 'playing') { for (let c = 0; c < 4; c++) state.four.clock[c] = fourClockLeft(c); state.four.frozen = true; const st = $('#four-status'); if (st) st.innerHTML = '📡 Verbindung unterbrochen – verbinde neu … (die Uhr steht)'; }
   if (state.game?.active && !state.game.spectator) setWait('self', { icon: '📡', title: 'Verbindung verloren', sub: 'Verbinde neu … deine Partie ist pausiert und läuft gleich weiter.' });
   else if (!state.restarting) toast('Verbindung verloren – verbinde neu…', 'warn');
 });
@@ -1400,7 +1408,7 @@ function ensureFourView() {
 }
 function fourClockLeft(c) {
   const g = state.four; let v = g.clock[c];
-  if (g.status === 'playing' && g.turn === c) v -= performance.now() - g.clockAt;
+  if (g.status === 'playing' && g.turn === c && !g.frozen) v -= performance.now() - g.clockAt;
   return Math.max(0, v);
 }
 function renderFourSide() {
