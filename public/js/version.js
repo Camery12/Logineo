@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.20.0';
+export const VERSION = '1.20.1';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.20.1', 'Ruckeln bei den Blitz-Figuren behoben: die Aura läuft jetzt über die Grafikkarte – fast doppelt bis dreifach so flüssig, besonders auf iPads'],
   ['1.20.0', 'Neues Blitz-Paket: Figuren „Blitz“ mit echter, zuckender Blitz-Aura (golden bei Weiß, eisblau bei Schwarz), Brett „Gewitterfront“ und der Donnerschlag-Finisher – zusammen 2.000 statt 4.900 Münzen'],
   ['1.19.4', 'Logo auf der Website wieder ♞ SchachArena – nur der Browser-Tab heißt „Meine Kurse“ mit orangem m'],
   ['1.19.3', 'Symbol jetzt ein oranges kleines m mit durchsichtigem Hintergrund'],
