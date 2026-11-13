@@ -156,7 +156,7 @@ function checkUpdate() {
   document.body.appendChild(el);
   setTimeout(() => location.reload(), 1200);
 }
-socket.on('session:replaced', () => { toast('Du hast SchachArena in einem anderen Tab geöffnet.', 'warn'); });
+socket.on('session:replaced', () => { toast('Du hast Meine Kurse in einem anderen Tab geöffnet.', 'warn'); });
 socket.on('stats', (s) => { const liveBefore = state.stats.live; state.stats = s; if (state.view === 'play' && (s.live || liveBefore)) refreshLive(); $('#online-count').textContent = `${s.online} online`; const el = $('#hero-online'); if (el) el.textContent = s.online; const pl = $('#hero-playing'); if (pl) pl.textContent = s.playing; });
 socket.on('toast', (t) => toast(esc(t.text), t.type));
 
@@ -243,7 +243,7 @@ function renderFooter() {
   const acc = !p ? '' : p.registered
     ? `Angemeldet als <b>${esc(p.name)}</b> · <button data-acc="logout">Abmelden</button>`
     : `<button data-acc="login">🔑 Anmelden</button> · <button data-acc="register">Konto erstellen</button>`;
-  $('#site-foot').innerHTML = `SchachArena · Version ${VERSION} · <button data-acc="changes">Was ist neu?</button>${acc ? ' · ' + acc : ''}`;
+  $('#site-foot').innerHTML = `Meine Kurse · Version ${VERSION} · <button data-acc="changes">Was ist neu?</button>${acc ? ' · ' + acc : ''}`;
   $$('#site-foot [data-acc]').forEach((b) => b.onclick = () => {
     const a = b.dataset.acc;
     if (a === 'changes') showChangelog();
@@ -2730,7 +2730,7 @@ async function renderReplays() {
 // ================================================================ Rangliste
 async function renderLeaderboard() {
   const root = $('#view-leaderboard');
-  root.innerHTML = `<div class="section-title"><div><h2>Rangliste</h2><p>Die besten Spieler der SchachArena nach Elo. Klicke auf einen Spieler, um sein Profil zu sehen.</p></div></div><div class="card"><div class="muted">Lade…</div></div>`;
+  root.innerHTML = `<div class="section-title"><div><h2>Rangliste</h2><p>Die besten Spieler nach Elo. Klicke auf einen Spieler, um sein Profil zu sehen.</p></div></div><div class="card"><div class="muted">Lade…</div></div>`;
   const { list } = await emit('leaderboard');
   const me = state.profile.id;
   $('.card', root).innerHTML = list.length ? `<table class="lb"><thead><tr><th>#</th><th>Spieler</th><th>Elo</th><th>S / N / R</th><th>Bot-Siege</th></tr></thead><tbody>

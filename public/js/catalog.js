@@ -264,7 +264,7 @@ export const BADGES = [
   { id: 'rich', icon: '💰', name: 'Schatzmeister', rarity: 'rare', desc: '10.000 Münzen auf einmal besessen.', test: (u) => u.coins >= 10000 || (u.maxCoins || 0) >= 10000 },
   { id: 'collector', icon: '🎨', name: 'Sammler', rarity: 'epic', desc: '25 Shop-Teile im Inventar.', test: (u) => ownedCount(u) >= 25 },
   { id: 'friends10', icon: '👋', name: 'Beliebt', rarity: 'rare', desc: '10 Freunde.', test: (u) => (u.friends?.length || 0) >= 10 },
-  { id: 'play24', icon: '⏱️', name: 'Dauerbrenner', rarity: 'epic', desc: '24 Stunden auf SchachArena verbracht.', test: (u) => (u.playMs || 0) >= 24 * 3600_000 },
+  { id: 'play24', icon: '⏱️', name: 'Dauerbrenner', rarity: 'epic', desc: '24 Stunden auf Meine Kurse verbracht.', test: (u) => (u.playMs || 0) >= 24 * 3600_000 },
   { id: 'veteran', icon: '🎂', name: 'Veteran', rarity: 'rare', desc: 'Seit 30 Tagen dabei.', test: (u) => Date.now() - (u.createdAt || Date.now()) >= 30 * 86_400_000 },
 ];
 // Alle verdienten Abzeichen, seltenste zuerst (die ersten 3 werden am Profil gezeigt)
