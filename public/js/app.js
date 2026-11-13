@@ -736,10 +736,75 @@ function pickTime(title, onPick, { list = TIMES, cur = state.challengeTime } = {
 const codeDigits = (code, small = false) => `<div class="code-display ${small ? 'small' : ''}">${[...code].map((d, i) => `<span style="animation-delay:${i * 50}ms">${d}</span>`).join('')}</div>`;
 
 // Hero-Brett: zeigt deine ausgerüsteten Skins und neigt sich zur Maus, wenn sie in der Nähe ist
-function renderHeroBoard() {
-  const p = state.profile, tilt = $('.hero-tilt');
-  if (!p || !tilt) return;
-  tilt.replaceChildren(miniBoard(p.equipped.board, mySkins(), 'r1bq1rk1/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQ1RK1'));
+// ---------------------------------------------------------------- Rätsel des Tages auf der Startseite (Matt in 1)
+let heroBoard = null, heroEl = null, puzzle = null;
+function heroLook() {
+  const p = state.profile;
+  const theme = findItem('board', p.equipped.board)?.view3d ? 'klassisch' : p.equipped.board; // 3D-Brett auf der Startseite flach
+  return { theme, skins: mySkins() };
+}
+async function renderHeroBoard() {
+  const p = state.profile, host = $('.hero-board');
+  if (!p || !host) return;
+  host.classList.add('puzzle');
+  if (!heroEl) {
+    heroEl = html(`<div class="hp"><div class="hp-head"><b>🧩 Rätsel des Tages</b><span id="hp-task"></span></div><div class="hp-board"><div id="hp-b"></div></div><div class="hp-foot" id="hp-foot"></div></div>`);
+    heroBoard = new Board($('#hp-b', heroEl), {
+      canMove: (c) => !!puzzle && !puzzle.locked && c === heroBoard.chess.turn(),
+      onMove: (m) => puzzleMove(m),
+    });
+  }
+  host.replaceChildren(heroEl);
+  const look = heroLook();
+  heroBoard.setTheme(look.theme); applyBoardTheme($('.hp-board', heroEl), look.theme); heroBoard.setSkins(look.skins);
+  if (!puzzle) {
+    const r = await emit('puzzle:get');
+    if (!r.fen) return;
+    puzzle = { ...r, locked: false };
+    puzzleReset();
+  } else puzzleText();
+}
+function puzzleReset() {
+  const turn = puzzle.fen.split(' ')[1];
+  heroBoard.setOrientation(turn);
+  heroBoard.load(puzzle.fen, null, false);
+  puzzle.locked = false;
+  puzzleText();
+}
+function puzzleText(msg = '', cls = '') {
+  if (!heroEl) return;
+  const turn = puzzle.fen.split(' ')[1] === 'w' ? 'Weiß' : 'Schwarz';
+  $('#hp-task', heroEl).innerHTML = `<b>${turn}</b> setzt matt in <b>1</b> Zug`;
+  $('#hp-foot', heroEl).innerHTML = msg ? `<span class="hp-msg ${cls}">${msg}</span>`
+    : puzzle.solved ? `<span class="hp-msg good">✅ Heute gelöst${puzzle.streak > 1 ? ` · 🔥 ${puzzle.streak} Tage in Folge` : ''} – morgen gibt's ein neues!</span> <button class="btn sm" id="hp-again">↺ Nochmal</button>`
+    : `<span class="muted small">Zieh eine Figur auf dem Brett · Belohnung <b style="color:var(--gold)">+${puzzle.reward} 🪙</b> einmal pro Tag</span>`;
+  const again = $('#hp-again', heroEl); if (again) again.onclick = puzzleReset;
+}
+async function puzzleMove(m) {
+  m.check ? sound.check() : m.captured ? sound.capture() : sound.move();
+  if (!m.san.includes('#')) {
+    puzzle.locked = true;
+    puzzleText('❌ Nicht matt – versuch\'s nochmal!', 'bad');
+    $('.hp-board', heroEl).classList.remove('shake'); void heroEl.offsetWidth; $('.hp-board', heroEl).classList.add('shake');
+    setTimeout(() => { if (puzzle.locked) puzzleReset(); }, 1100);
+    return;
+  }
+  puzzle.locked = true;
+  const r = await emit('puzzle:solve', { from: m.from, to: m.to, promotion: m.promotion });
+  if (r.error) { puzzleText(esc(r.error), 'bad'); setTimeout(puzzleReset, 1200); return; }
+  const first = !puzzle.solved;
+  puzzle.solved = true; puzzle.streak = r.streak ?? puzzle.streak;
+  puzzleText('🎉 Schachmatt!', 'good');
+  sound.boom?.();
+  // eigener 3D-Finisher als Belohnung
+  try {
+    const { playFinisher } = await import('./finisher.js');
+    const look = heroLook();
+    await playFinisher({ finisher: state.profile.equipped.finisher, fen: heroBoard.fen, boardTheme: look.theme, skins: look.skins, loserColor: heroBoard.chess.turn(), winnerName: state.profile.name, subtitle: 'Rätsel des Tages', attackerSq: m.to });
+  } catch { /* ohne 3D geht's auch */ }
+  if (r.profile) setProfile(r.profile, { coinsAnim: true });
+  if (first && r.coins) { confetti(); toast(`🧩 Rätsel gelöst! <b>+${r.coins} Münzen</b>${r.streak > 1 ? ` · 🔥 ${r.streak} Tage in Folge` : ''}`, 'good'); }
+  puzzleText();
 }
 let heroRaf = 0;
 document.addEventListener('pointermove', (e) => {

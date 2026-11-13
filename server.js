@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import compression from 'compression';
 import { Chess } from 'chess.js';
-import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, pieceLook, computeBadges, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
+import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, pieceLook, computeBadges, PUZZLES, PUZZLE_REWARD, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
 import { checkUsername, badWord, badChat } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
@@ -1421,6 +1421,25 @@ io.on('connection', (socket) => {
   // --- Profil eines anderen Spielers ansehen
   // --- Admin-Menü: Spieler suchen und Münzen geben/abziehen (nur für Admins, Server prüft jedes Mal)
   adminApi.register(socket, () => user, need);
+  // --- Rätsel des Tages (Matt in 1) auf der Startseite
+  const berlinDay = (t = Date.now()) => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+  const puzzleToday = () => { const day = berlinDay(); return { day, idx: Math.floor(Date.parse(day) / 86_400_000) % PUZZLES.length }; };
+  socket.on('puzzle:get', need((_, ack) => {
+    const { day, idx } = puzzleToday();
+    ack?.({ id: idx, fen: PUZZLES[idx][0], solved: user.puzzleDay === day, streak: user.puzzleStreak || 0, reward: PUZZLE_REWARD });
+  }));
+  socket.on('puzzle:solve', need(({ from, to, promotion } = {}, ack) => {
+    const { day, idx } = puzzleToday();
+    const c = new Chess(PUZZLES[idx][0]);
+    let m = null; try { m = c.move({ from, to, promotion: promotion || 'q' }); } catch { m = null; }
+    if (!m || !c.isCheckmate()) return ack?.({ error: 'Das ist leider kein Matt.' });
+    if (user.puzzleDay === day) return ack?.({ ok: true, already: true, streak: user.puzzleStreak || 0 });
+    user.puzzleStreak = user.puzzleDay === berlinDay(Date.now() - 86_400_000) ? (user.puzzleStreak || 0) + 1 : 1;
+    user.puzzleDay = day; user.coins += PUZZLE_REWARD;
+    (user.stats.puzzles = (user.stats.puzzles || 0) + 1);
+    save();
+    ack?.({ ok: true, coins: PUZZLE_REWARD, streak: user.puzzleStreak, profile: priv(user) });
+  }));
   casino.register(socket, () => user, need);
   socket.on('admin:find', need(({ query } = {}, ack) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });

@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.23.5';
+export const VERSION = '1.24.0';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.24.0', 'Rätsel des Tages auf der Startseite: Finde das Matt in 1 direkt auf dem Brett – richtig gelöst gibt es deinen 3D-Finisher und +50 Münzen (einmal pro Tag), mit Serie für mehrere Tage in Folge'],
   ['1.23.5', 'Blitz-Aura ruhiger: kleiner, dünnere Blitze, langsameres und sanfteres Flackern'],
   ['1.23.4', 'Kopfzeile auf breiten Bildschirmen (1440–2100 Pixel) nicht mehr abgeschnitten: kompakte Tabs mit Symbol über dem Text'],
   ['1.23.3', 'Firefox: Leiste unten ist wieder deckend (Inhalt schien durch). Casino: schnelles Klicken bei Mines wird nicht mehr blockiert'],

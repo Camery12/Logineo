@@ -1274,3 +1274,15 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 @keyframes zapA { 0%, 100% { opacity: .2; } 30% { opacity: .55; } 34% { opacity: .3; } 38% { opacity: .6; } 60% { opacity: .25; } 80% { opacity: .45; } }
 @keyframes zapB { 0% { opacity: 0; transform: rotate(0deg); } 20% { opacity: .55; } 23% { opacity: 0; } 50% { transform: rotate(180deg); } 70% { opacity: .5; } 73% { opacity: 0; } }
 @media (pointer: coarse) { .piece.aura::before, .mini-board i.aura::before { animation-duration: 4.5s; } }
+
+/* ================================================================ Rätsel des Tages (Startseite) */
+.hero-board.puzzle { transform: none; animation: none; filter: none; width: min(400px, 100%); }
+.hp { display: grid; gap: 10px; }
+.hp-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+.hp-head > b { font-size: 16px; }
+.hp-head span { color: var(--muted); } .hp-head span b { color: var(--text); }
+.hp-board { padding: 10px; border-radius: 14px; background: linear-gradient(145deg, color-mix(in srgb, var(--frame, #5d3a1a) 85%, white), var(--frame, #5d3a1a)); box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 255, 255, .06); }
+.hp-board.shake { animation: shakeS .35s; }
+.hp-foot { min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; text-align: center; font-size: 14px; }
+.hp-msg { font-weight: 700; } .hp-msg.good { color: var(--good, #34d399); } .hp-msg.bad { color: #ff8a9a; }
+@media (max-width: 760px) { .hero-board.puzzle { display: block; justify-self: stretch; width: 100%; max-width: 440px; margin: 6px auto 0; } }
