@@ -13,44 +13,272 @@
     // Alte Schach-Links wie logineo.club/#casino führen weiter zum Schach
     if (/^#(play|bots|shop|inventory|casino|leaderboard|friends|replays|profile|admin|game|four)$/.test(location.hash)) location.replace('/chess/' + location.hash);
   </script>
+  <script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js", "three/addons/": "/vendor/three-jsm/" } }</script>
   <style>
-    :root { --bg: #0b0d14; --card: #141826; --line: rgba(255, 255, 255, .08); --text: #eef1f8; --muted: #9aa3b8; --grad: linear-gradient(135deg, #7c5cff, #22d3ee); }
+    :root { --ink: #111216; --paper: #ecebe8; --red: #e5261f; --cyan: #33e1ff; --p: 0; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-    .glow { position: fixed; inset: -20%; z-index: -1; pointer-events: none; background: radial-gradient(40% 35% at 15% 10%, rgba(124, 92, 255, .22), transparent 70%), radial-gradient(35% 30% at 90% 20%, rgba(34, 211, 238, .14), transparent 70%), radial-gradient(40% 40% at 50% 110%, rgba(244, 63, 94, .1), transparent 70%); }
-    main { max-width: 1100px; margin: 0 auto; padding: 56px 22px 40px; }
-    h1 { font-size: clamp(34px, 6vw, 58px); margin: 0 0 8px; letter-spacing: -.02em; }
-    h1 span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-    .sub { color: var(--muted); font-size: 18px; margin: 0 0 36px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; }
-    .game { position: relative; display: grid; gap: 10px; padding: 22px; border-radius: 20px; background: var(--card); border: 1px solid var(--line); color: inherit; text-decoration: none; transition: transform .2s, box-shadow .2s, border-color .2s; overflow: hidden; }
-    a.game:hover { transform: translateY(-4px); border-color: rgba(124, 92, 255, .6); box-shadow: 0 24px 50px -24px rgba(124, 92, 255, .6); }
-    .game .ic { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; font-size: 36px; background: var(--grad); }
-    .game h2 { margin: 4px 0 0; font-size: 22px; }
-    .game p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
-    .game .go { margin-top: 6px; font-weight: 700; color: #a99bff; }
-    .game.soon { opacity: .5; border-style: dashed; }
-    .game.soon .ic { background: rgba(255, 255, 255, .06); }
-    .tag { position: absolute; top: 16px; right: 16px; font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 99px; background: rgba(255, 255, 255, .08); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-    footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 50px; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; overflow-x: hidden; transition: color .5s; }
+    body.dark { color: #f3f4f8; }
+    #bg { position: fixed; inset: 0; z-index: 0; display: block; width: 100%; height: 100%; }
+    .fallback #bg { display: none; }
+    /* Kopfzeile */
+    header { position: fixed; z-index: 10; inset: 0 0 auto; display: flex; align-items: center; gap: 18px; padding: 18px clamp(16px, 4vw, 42px); pointer-events: none; }
+    header > * { pointer-events: auto; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 900; letter-spacing: -.02em; font-size: 18px; color: inherit; text-decoration: none; }
+    .brand i { width: 30px; height: 30px; border-radius: 9px; background: var(--red); display: grid; place-items: center; color: #fff; font-style: normal; font-size: 17px; box-shadow: 0 6px 18px -6px var(--red); }
+    nav { display: flex; gap: 22px; margin-left: auto; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    nav a { color: inherit; text-decoration: none; opacity: .7; } nav a:hover { opacity: 1; }
+    .pill { display: inline-flex; align-items: center; gap: 10px; padding: 9px 9px 9px 18px; border-radius: 999px; background: var(--ink); color: #fff; font-weight: 800; font-size: 14px; text-decoration: none; transition: transform .2s, background .3s; }
+    .pill b { width: 26px; height: 26px; border-radius: 50%; background: var(--red); display: grid; place-items: center; font-size: 13px; transition: background .3s; }
+    .pill:hover { transform: translateY(-2px); }
+    body.dark .pill { background: #fff; color: var(--ink); } body.dark .pill b { background: var(--cyan); color: var(--ink); }
+    /* Abschnitte */
+    main { position: relative; z-index: 2; }
+    section { position: relative; min-height: 100vh; padding: 110px clamp(18px, 5vw, 60px) 60px; }
+    .hero { display: grid; grid-template-rows: 1fr auto; }
+    .hero .claim { align-self: center; max-width: 330px; font-weight: 900; font-size: clamp(20px, 2.4vw, 30px); line-height: 1.05; text-transform: uppercase; letter-spacing: -.01em; }
+    .hero .claim small { display: block; margin-top: 14px; font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0; opacity: .65; line-height: 1.5; }
+    .hero .claim .pill { margin-top: 18px; }
+    .hero .stat { position: absolute; right: clamp(18px, 5vw, 60px); top: 30vh; text-align: right; font-weight: 900; font-size: clamp(26px, 3.4vw, 46px); letter-spacing: -.03em; }
+    .hero .stat small { display: block; font-size: 12px; font-weight: 600; letter-spacing: 0; opacity: .6; max-width: 220px; margin-left: auto; }
+    .mega { font-weight: 900; font-size: clamp(64px, 19vw, 300px); line-height: .8; letter-spacing: -.06em; margin: 0 -0.04em; white-space: nowrap; text-transform: uppercase; }
+    .scroll-hint { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); font-size: 11px; font-weight: 800; letter-spacing: .2em; opacity: .5; animation: bob 2s ease-in-out infinite; }
+    @keyframes bob { 50% { transform: translate(-50%, 6px); } }
+    .spacer { min-height: 90vh; }
+    /* Spiele */
+    .games h2, .end h2 { font-weight: 900; font-size: clamp(38px, 8vw, 110px); line-height: .85; letter-spacing: -.05em; margin: 0 0 40px; text-transform: uppercase; color: transparent; -webkit-text-stroke: 1.5px currentColor; }
+    body.dark .games h2 { color: transparent; -webkit-text-stroke: 1.5px var(--cyan); text-shadow: 0 0 30px rgba(51, 225, 255, .35); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 26px; max-width: 1000px; }
+    .card { position: relative; display: grid; gap: 12px; padding: 18px; border-radius: 22px; color: #fff; text-decoration: none; background: linear-gradient(160deg, rgba(229, 38, 31, .95), rgba(120, 14, 10, .95)); box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .8), inset 0 1px 0 rgba(255, 255, 255, .25); transform: translateY(40px) rotate(var(--r, 0deg)); opacity: 0; transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .8s; }
+    .card.in { transform: translateY(0) rotate(var(--r, 0deg)); opacity: 1; }
+    a.card:hover { transform: translateY(-8px) rotate(0deg) scale(1.02); }
+    .card .shot { aspect-ratio: 16 / 10; border-radius: 14px; background: #120404 center / cover no-repeat; display: grid; place-items: center; font-size: 74px; overflow: hidden; position: relative; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+    .card .shot .board { position: absolute; inset: 10% 22%; display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr); transform: perspective(500px) rotateX(48deg) rotateZ(-30deg); box-shadow: 0 20px 30px rgba(0, 0, 0, .6); }
+    .card .shot .board i:nth-child(16n+1), .card .shot .board i:nth-child(16n+3), .card .shot .board i:nth-child(16n+5), .card .shot .board i:nth-child(16n+7), .card .shot .board i:nth-child(16n+10), .card .shot .board i:nth-child(16n+12), .card .shot .board i:nth-child(16n+14), .card .shot .board i:nth-child(16n+16) { background: #f3d9b8; }
+    .card .shot .board i { background: #8d5a35; }
+    .card .shot .knight { position: relative; z-index: 2; filter: drop-shadow(0 10px 18px rgba(0, 0, 0, .7)); animation: hover 3s ease-in-out infinite; }
+    @keyframes hover { 50% { transform: translateY(-10px) rotate(-6deg); } }
+    .card h3 { margin: 4px 0 0; font-size: 26px; letter-spacing: -.02em; }
+    .card p { margin: 0; opacity: .85; font-size: 14px; line-height: 1.45; }
+    .card .tags { display: flex; flex-wrap: wrap; gap: 6px; } .card .tags span { font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 99px; background: rgba(0, 0, 0, .3); }
+    .card .go { font-weight: 900; display: flex; align-items: center; gap: 8px; }
+    .card.soon { background: rgba(28, 6, 6, .9); border: 1.5px dashed rgba(255, 255, 255, .25); box-shadow: none; }
+    .card.soon .shot { background: rgba(255, 255, 255, .03); font-size: 56px; }
+    .live { position: absolute; top: 28px; right: 28px; z-index: 3; display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 900; padding: 5px 10px; border-radius: 99px; background: rgba(0, 0, 0, .55); }
+    .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #3dff8a; box-shadow: 0 0 10px #3dff8a; }
+    /* Ende mit Ausweis */
+    .end { display: grid; grid-template-columns: 1.1fr 1fr; align-items: center; gap: 30px; }
+    .end h2 { color: var(--cyan); -webkit-text-stroke: 0; text-shadow: 0 0 40px rgba(51, 225, 255, .45); font-size: clamp(38px, 6.2vw, 92px); }
+    .badge-wrap { position: relative; height: 560px; display: grid; justify-items: center; }
+    .lanyard { position: absolute; top: -110px; width: 4px; height: 210px; background: linear-gradient(#000, #333); left: 50%; margin-left: -2px; }
+    .badge { position: absolute; top: 90px; width: 260px; transform-origin: 50% -200px; text-decoration: none; color: #fff; will-change: transform; }
+    .badge .clip { width: 34px; height: 34px; margin: 0 auto -6px; border: 5px solid #999; border-radius: 50%; border-bottom-color: transparent; }
+    .badge .body { padding: 14px; border-radius: 18px; background: #0d0d10; box-shadow: 0 40px 70px -20px rgba(0, 0, 0, .9), inset 0 0 0 1px rgba(255, 255, 255, .08); }
+    .badge .art { aspect-ratio: 1; border-radius: 12px; background: radial-gradient(circle at 50% 45%, #ff4b3f, var(--red) 40%, #7a0d08); display: grid; place-items: center; font-size: 120px; color: #0d0d10; text-shadow: 0 2px 0 rgba(255, 255, 255, .15); }
+    .badge .name { margin-top: 12px; font-size: 30px; font-weight: 900; letter-spacing: -.03em; color: var(--cyan); text-align: center; text-shadow: 0 0 20px rgba(51, 225, 255, .5); }
+    .badge .role { text-align: center; font-size: 12px; opacity: .6; margin-top: 2px; }
+    footer { position: relative; z-index: 2; padding: 30px; text-align: center; font-size: 12px; opacity: .55; }
+    /* Fallback ohne WebGL / reduzierte Bewegung */
+    .fallback body, body.fallback { background: linear-gradient(180deg, var(--paper) 0 30%, #3a0805 60%, #1a0303); }
+    @media (max-width: 800px) {
+      nav { display: none; } .hero .stat { display: none; }
+      .end { grid-template-columns: 1fr; } .badge-wrap { height: 470px; }
+      .hero .claim { align-self: start; margin-top: 46vh; }
+    }
+    @media (prefers-reduced-motion: reduce) { .scroll-hint, .card .shot .knight { animation: none; } }
   </style>
 </head>
 <body>
-  <div class="glow"></div>
+  <canvas id="bg"></canvas>
+  <header>
+    <a class="brand" href="/"><i>▶</i>PlayHub</a>
+    <nav><a href="#spiele">Spiele</a><a href="#los">Los geht's</a></nav>
+    <a class="pill" href="/chess/">Jetzt spielen <b>→</b></a>
+  </header>
   <main>
-    <h1>Play<span>Hub</span></h1>
-    <p class="sub">Such dir ein Spiel aus.</p>
-    <div class="grid">
-      <a class="game" href="/chess/">
-        <span class="tag" style="background:rgba(52,211,153,.15);color:#6ee7a8">Online</span>
-        <div class="ic">♞</div>
-        <h2>SchachArena</h2>
-        <p>Online-Schach mit Freunden, 2 vs 2, Bots, Rätsel des Tages, Shop, Casino und 3D-Finishern.</p>
-        <span class="go">Spielen →</span>
-      </a>
-      <div class="game soon"><span class="tag">Bald</span><div class="ic">🎮</div><h2>Mehr Spiele</h2><p>Hier kommen bald weitere Spiele dazu.</p></div>
-    </div>
-    <footer>PlayHub</footer>
+    <section class="hero" id="top">
+      <div class="claim">Dein Spielplatz im Netz.<small>Spiele direkt im Browser – mit Freunden, gegen Bots oder gegen die ganze Schule. Kein Download, kein Warten.</small><a class="pill" href="#spiele">Spiele ansehen <b>↓</b></a></div>
+      <div class="stat">100 % Browser<small>Läuft am Laptop, iPad und Handy – einfach Seite öffnen und losspielen.</small></div>
+      <div class="mega" id="mega">PlayHub</div>
+      <div class="scroll-hint">SCROLLEN</div>
+    </section>
+    <div class="spacer"></div>
+    <section class="games" id="spiele">
+      <h2>Die Spiele</h2>
+      <div class="cards">
+        <a class="card" href="/chess/" style="--r:-2deg">
+          <span class="live" id="online">online</span>
+          <div class="shot"><div class="board">${'<i></i>'.repeat(64)}</div><span class="knight">♞</span></div>
+          <h3>SchachArena</h3>
+          <p>Online-Schach mit Freunden, 2 vs 2, Bots vom Neuling bis zur Legende, Rätsel des Tages, Shop, Casino und 3D-Finisher.</p>
+          <div class="tags"><span>1 vs 1</span><span>2 vs 2</span><span>4er</span><span>Bots</span><span>Casino</span></div>
+          <span class="go">Spielen →</span>
+        </a>
+        <div class="card soon" style="--r:2deg"><div class="shot">🎮</div><h3>Bald mehr</h3><p>Hier kommen bald weitere Spiele dazu. Wünsche? Sag Bescheid!</p></div>
+      </div>
+    </section>
+    <section class="end" id="los">
+      <div><h2>Bereit für die nächste Runde?</h2><a class="pill" href="/chess/">SchachArena starten <b>→</b></a></div>
+      <div class="badge-wrap"><div class="lanyard"></div>
+        <a class="badge" id="badge" href="/chess/"><div class="clip"></div><div class="body"><div class="art">♞</div><div class="name">PlayHub</div><div class="role">Spieler-Ausweis · SchachArena</div></div></a>
+      </div>
+    </section>
   </main>
+  <footer>PlayHub</footer>
+
+  <script>
+    // Brett-Felder für die Karte erzeugen (statt Template-Platzhalter)
+    document.querySelectorAll('.board').forEach((b) => { b.innerHTML = '<i></i>'.repeat(64); });
+    // Karten einblenden, wenn sie ins Bild kommen
+    const io = new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && e.target.classList.add('in')), { threshold: .2 });
+    document.querySelectorAll('.card').forEach((c) => io.observe(c));
+    // Hängender Ausweis: schwingt mit der Maus und beim Scrollen (einfaches Pendel)
+    (() => {
+      const el = document.getElementById('badge'); let a = 0, v = 0, target = 0, lastY = scrollY, lastX = null;
+      addEventListener('pointermove', (e) => { if (lastX != null) v += (e.clientX - lastX) * 0.004; lastX = e.clientX; target = (e.clientX / innerWidth - .5) * 10; });
+      addEventListener('scroll', () => { v += (scrollY - lastY) * 0.01; lastY = scrollY; }, { passive: true });
+      const tick = () => { v += (target - a) * 0.02; v *= 0.93; a += v; a = Math.max(-35, Math.min(35, a)); el.style.transform = `rotate(${a.toFixed(2)}deg)`; requestAnimationFrame(tick); };
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) tick();
+    })();
+    // Online-Zahl vom Schachserver (falls erreichbar)
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+    const canvas = document.getElementById('bg');
+    const touch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 1;
+    const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let renderer;
+    try { renderer = new THREE.WebGLRenderer({ canvas, antialias: !touch, alpha: false, powerPreference: 'high-performance' }); }
+    catch { document.body.classList.add('fallback'); throw new Error('kein WebGL'); }
+    renderer.setPixelRatio(Math.min(devicePixelRatio, touch ? 1 : 1.75));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    const scene = new THREE.Scene();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+    camera.position.set(0, 0, 14);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(4, 6, 8); scene.add(key);
+    const rim = new THREE.PointLight(0xff3020, 0, 30); rim.position.set(-4, -2, 4); scene.add(rim);
+
+    const world = new THREE.Group(); scene.add(world);
+
+    // ---------------- Chrom-Stern (Kern + Stacheln)
+    const chrome = new THREE.MeshStandardMaterial({ color: 0x8a8d96, metalness: 1, roughness: 0.18 });
+    const star = new THREE.Group();
+    star.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 1), chrome));
+    const dirs = [];
+    for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; dirs.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0)); }
+    dirs.push(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1));
+    for (const [i, d] of dirs.entries()) {
+      const len = i % 2 ? 1.1 : 1.65;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.22, len, 6), chrome);
+      spike.position.copy(d.clone().multiplyScalar(0.45 + len / 2));
+      spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+      star.add(spike);
+    }
+    world.add(star);
+
+    // ---------------- Schwebende Blöcke (wie Spielsteine), später ein Ring um den Stern
+    const N = touch ? 54 : 140;
+    const cubeMat = new THREE.MeshStandardMaterial({ metalness: 0.35, roughness: 0.28 });
+    const cubes = new THREE.InstancedMesh(new RoundedBoxGeometry(0.42, 0.42, 0.42, touch ? 1 : 3, 0.07), cubeMat, N);
+    cubes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    const items = Array.from({ length: N }, (_, i) => {
+      const r = rnd(2.6, 8), th = rnd(0, Math.PI * 2);
+      return {
+        scatter: new THREE.Vector3(Math.cos(th) * r * 1.5, Math.sin(th) * r * 0.75, rnd(-4, 2)),
+        ring: (() => { const a = (i / N) * Math.PI * 2; const rr = 2.55 + (i % 3) * 0.32; return new THREE.Vector3(Math.cos(a) * rr, Math.sin(a) * rr, ((i % 3) - 1) * 0.25); })(),
+        rot: new THREE.Euler(rnd(0, 6), rnd(0, 6), rnd(0, 6)), spin: rnd(-0.6, 0.6),
+        dark: new THREE.Color().setHSL(0, 0, rnd(0.04, 0.12)), ringCol: new THREE.Color(i % 4 === 0 ? 0xf2f2f2 : 0xe5261f),
+      };
+    });
+    for (let i = 0; i < N; i++) cubes.setColorAt(i, items[i].dark);
+    world.add(cubes);
+
+    // ---------------- Kette (Chrom, später türkis leuchtend)
+    const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(-11, -5, -2), new THREE.Vector3(-4, -1.5, 2.5), new THREE.Vector3(0, 0.4, 3), new THREE.Vector3(4, 1.8, 1), new THREE.Vector3(11, 5.5, -3)]);
+    const LINKS = touch ? 46 : 90;
+    const chainMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd4, metalness: 1, roughness: 0.22, emissive: 0x000000 });
+    const linkGeo = new THREE.TorusGeometry(0.26, 0.075, touch ? 6 : 10, touch ? 14 : 22); linkGeo.scale(1, 1.65, 1);
+    const chain = new THREE.InstancedMesh(linkGeo, chainMat, LINKS);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1);
+    for (let i = 0; i < LINKS; i++) {
+      const t = i / (LINKS - 1), pos = curve.getPointAt(t), tan = curve.getTangentAt(t);
+      q.setFromUnitVectors(up, tan);
+      if (i % 2) q.multiply(new THREE.Quaternion().setFromAxisAngle(up, Math.PI / 2));
+      chain.setMatrixAt(i, m4.compose(pos, q, sc));
+    }
+    world.add(chain);
+
+    // ---------------- Scroll & Maus
+    let p = 0, pSmooth = 0, mx = 0, my = 0;
+    const onScroll = () => { const max = document.documentElement.scrollHeight - innerHeight; p = max > 0 ? scrollY / max : 0; };
+    addEventListener('scroll', onScroll, { passive: true }); onScroll();
+    addEventListener('pointermove', (e) => { mx = e.clientX / innerWidth - 0.5; my = e.clientY / innerHeight - 0.5; });
+    const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); camera.position.z = innerWidth < 800 ? 19 : 14; };
+    addEventListener('resize', resize); resize();
+
+    const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const paper = new THREE.Color(0xecebe8), redMid = new THREE.Color(0x9b1610), red = new THREE.Color(0x3a0806), deep = new THREE.Color(0x120202), bg = new THREE.Color();
+    const cyan = new THREE.Color(0x33e1ff), silver = new THREE.Color(0xc9ccd4), cA = new THREE.Color(), cB = new THREE.Color();
+    const pos = new THREE.Vector3(), e = new THREE.Euler(), clock = new THREE.Clock();
+    let dark = false;
+
+    function frame() {
+      const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+      pSmooth += (p - pSmooth) * (1 - Math.pow(0.001, dt));
+      const ringK = smooth(0.08, 0.32, pSmooth);       // Blöcke ziehen sich zum Ring zusammen
+      const darkK = smooth(0.3, 0.42, pSmooth);        // Wechsel zu Dunkelrot (schnell, damit es nicht grau-matschig wirkt)
+      const outK = smooth(0.55, 0.85, pSmooth);        // Szene tritt zurück für Karten/Ausweis
+      // Hintergrund
+      bg.copy(paper).lerp(redMid, smooth(0, 0.5, darkK)).lerp(red, smooth(0.5, 1, darkK)).lerp(deep, outK * 0.6);
+      renderer.setClearColor(bg);
+      const nowDark = darkK > 0.5;
+      if (nowDark !== dark) { dark = nowDark; document.body.classList.toggle('dark', dark); }
+      // Stern
+      star.rotation.z += dt * (0.25 + ringK * 0.6); star.rotation.y = Math.sin(t * 0.4) * 0.35 + mx * 0.6;
+      star.scale.setScalar(1 + ringK * 0.15 - outK * 0.5);
+      star.position.set(outK * 6.5, outK * 3.2, -outK * 3);
+      // Blöcke
+      for (let i = 0; i < N; i++) {
+        const it = items[i];
+        pos.copy(it.scatter).lerp(it.ring, ringK);
+        if (ringK > 0.01) pos.applyAxisAngle(new THREE.Vector3(0, 0, 1), t * 0.25 * ringK);
+        pos.y += Math.sin(t * 0.8 + i) * 0.12 * (1 - ringK);
+        pos.add(star.position);
+        pos.multiplyScalar(1 + outK * 0.25);
+        e.set(it.rot.x + t * it.spin * (1 - ringK), it.rot.y + t * it.spin, it.rot.z);
+        m4.compose(pos, q.setFromEuler(e), sc.setScalar(1 - outK * 0.5));
+        cubes.setMatrixAt(i, m4);
+        cA.copy(it.dark).lerp(it.ringCol, ringK * (1 - darkK * 0.5));
+        cubes.setColorAt(i, cA);
+      }
+      cubes.instanceMatrix.needsUpdate = true; cubes.instanceColor.needsUpdate = true; sc.set(1, 1, 1);
+      // Kette: fährt ins Bild, wird dann türkis
+      const show = smooth(0.12, 0.4, pSmooth);
+      chain.count = Math.max(0, Math.round(LINKS * show));
+      chain.position.set(outK * 2, -outK * 6, -outK * 2); chain.rotation.z = -outK * 0.35 + Math.sin(t * 0.3) * 0.03;
+      chainMat.color.copy(silver).lerp(cyan, darkK * 0.6);
+      chainMat.emissive.copy(cyan).multiplyScalar(darkK * 0.9);
+      rim.intensity = darkK * 40;
+      // Kamera folgt der Maus ein wenig
+      world.rotation.x += ((my * 0.25) - world.rotation.x) * 0.05;
+      world.rotation.y += ((mx * 0.35) - world.rotation.y) * 0.05;
+      renderer.render(scene, camera);
+      if (!calm || pSmooth !== p) requestAnimationFrame(frame);
+    }
+    if (calm) { addEventListener('scroll', () => requestAnimationFrame(frame), { passive: true }); }
+    requestAnimationFrame(frame);
+    // Riesen-Schriftzug passt sich an die Breite an
+    const mega = document.getElementById('mega');
+    const fit = () => { mega.style.fontSize = ''; const w = mega.scrollWidth, avail = mega.parentElement.clientWidth; if (w > avail) mega.style.fontSize = (parseFloat(getComputedStyle(mega).fontSize) * avail / w) + 'px'; };
+    addEventListener('resize', fit); fit();
+  </script>
 </body>
 </html>
