@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.19.1';
+export const VERSION = '1.19.2';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.19.2', 'Symbol jetzt ein gelbes kleines m mit durchsichtigem Hintergrund'],
   ['1.19.1', 'Neuer Name „Meine Kurse“ und neues Symbol: oranges kleines m (Tab, Homescreen und Logo)'],
   ['1.19.0', '25 Abzeichen in 5 Seltenheitsstufen (Gewöhnlich bis Mythisch, jede mit eigenem Glanz) für Rangliste, Elo, besiegte Bots, Online-Erfolge und mehr – die 3 seltensten stehen am Profil, im Spiel und in der Rangliste. Anti-Cheat deutlich fairer: markiert nur noch eindeutiges Elo-Farming, nicht mehr Spieler im selben WLAN, Anfänger oder Freunde, die echte Partien spielen'],
   ['1.18.1', 'Anti-Cheat fairer: Wer einfach besser spielt, wird nicht mehr bestraft – echte, ausgespielte Partien werden immer gewertet. Nur sehr kurze oder früh aufgegebene Partien gegen denselben Gegner gelten als Farming. Bei vielen echten Siegen gegen denselben Gegner am selben Tag gibt es weniger Elo (ab dem 4. Sieg die Hälfte, ab dem 6. ein Viertel)'],

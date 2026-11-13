@@ -1146,4 +1146,4 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .badge-pop.r-rare { --g: rgba(59, 130, 246, .45); } .badge-pop.r-epic { --g: rgba(168, 85, 247, .5); } .badge-pop.r-legendary { --g: rgba(251, 191, 36, .55); } .badge-pop.r-mythic { --g: rgba(255, 79, 216, .55); }
 @keyframes bdgPop { from { transform: scale(.2) rotate(-25deg); opacity: 0; } }
 /* Logo: oranges kleines m */
-.logo-mark.m-mark { background: linear-gradient(160deg, #ffa53a, #f26a0d) !important; color: #fff; font-weight: 800; font-size: 26px; line-height: 1; padding-bottom: 4px; text-shadow: 1px 1px 0 rgba(150, 60, 0, .35); font-family: 'Helvetica Neue', Arial, sans-serif; }
+.logo-mark.m-mark { background: none !important; box-shadow: none; color: #ffd21f; font-weight: 800; font-size: 36px; line-height: 1; padding-bottom: 6px; text-shadow: 1px 1.5px 0 rgba(120, 80, 0, .45); font-family: 'Helvetica Neue', Arial, sans-serif; }
