@@ -18,7 +18,7 @@ const cols = (vals, labels) => {
   const max = Math.max(1, ...vals);
   return `<div class="ax-cols">${vals.map((v, i) => `<div class="ax-col" title="${labels[i]}: ${v}"><i style="--h:${(v / max) * 100}%"></i><b>${v}</b><span>${labels[i].slice(8)}.${labels[i].slice(5, 7)}</span></div>`).join('')}</div>`;
 };
-const scoreBar = (n) => `<span class="ax-score ${n >= 80 ? 'hi' : n >= 30 ? 'mid' : 'lo'}"><i style="--w:${Math.min(100, n)}%"></i><b>${n}</b></span>`;
+const scoreBar = (n) => `<span class="ax-score ${n >= 100 ? 'hi' : n >= 50 ? 'mid' : 'lo'}"><i style="--w:${Math.min(100, n)}%"></i><b>${n}</b></span>`;
 const toggle = (id, on, label, sub = '') => `<label class="ax-toggle"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span class="ax-sw"></span><span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span></label>`;
 function download(name, mime, data) {
   const a = document.createElement('a');
@@ -34,7 +34,7 @@ export async function tabAntiCheat(box, sub = 'cases') {
   if (sub === 'cases') {
     const all = !!box.dataset.all;
     const r = await ask('ac:list', { all }); if (!r) return;
-    body.innerHTML = `<div class="adm-row" style="justify-content:space-between"><span class="muted small">Punkte aus den letzten 14 Tagen. Ab 30 Punkten genauer hinschauen, ab 80 ist es sehr wahrscheinlich Betrug. Anti-Cheat ist ${r.settings.enabled ? '<b class="res-win">AN</b>' : '<b class="res-loss">AUS</b>'}.</span>
+    body.innerHTML = `<div class="adm-row" style="justify-content:space-between"><span class="muted small">Hier stehen nur Spieler mit mindestens 50 Punkten (14 Tage) – das gibt es nur bei eindeutigen Mustern wie wiederholtem Elo-Farming. Ab 100 Punkten ist Betrug sehr wahrscheinlich. Normale Spieler, Anfänger und Freunde im selben WLAN tauchen hier nicht auf. Anti-Cheat ist ${r.settings.enabled ? '<b class="res-win">AN</b>' : '<b class="res-loss">AUS</b>'}.</span>
       <span><label class="ax-inline"><input type="checkbox" id="ac-all" ${all ? 'checked' : ''}> auch erledigte</label> <button class="btn sm" id="ac-scan">🔎 Alle Spieler scannen</button></span></div>
       <div class="ax-cases">${r.list.length ? r.list.map((u) => `<div class="ax-case" data-q="${u.code}">
         <div class="ax-case-head">${H.avatar(u.avatar, 36)}<div><b>${H.esc(u.name)}</b> ${u.online ? '<i class="dot"></i>' : ''}${u.trusted ? ' <span class="tag">✅ vertraut</span>' : ''}${u.ban ? ' <span class="tag ban-tag">gesperrt</span>' : ''}<div class="muted small">Code ${u.code} · ${u.rating} Elo · zuletzt ${u.online ? 'online' : fmtDate(u.lastSeen)}</div></div>${scoreBar(u.acScore)}</div>
@@ -81,8 +81,8 @@ export async function tabAntiCheat(box, sub = 'cases') {
     const s = r.settings;
     body.innerHTML = `<div class="ax-grid2"><div>
         ${toggle('ac-enabled', s.enabled, 'Anti-Cheat aktiv', 'Partien werden auf Betrugsmuster geprüft')}
-        ${toggle('ac-autoUnrate', s.autoUnrate, 'Verdächtige Partien nicht werten', 'Gleiche Verbindung oder 4+ Siege gegen denselben Gegner in 24 Std. → keine Elo & Münzen')}
-        ${toggle('ac-notify', s.notify, 'Admins sofort benachrichtigen', 'Popup bei jedem neuen Verdacht')}
+        ${toggle('ac-autoUnrate', s.autoUnrate, 'Verdächtige Partien nicht werten', 'Nur sehr kurze oder sofort aufgegebene Partien, die sich gegen denselben Gegner wiederholen → keine Elo & Münzen. Ausgespielte Partien zählen immer.')}
+        ${toggle('ac-notify', s.notify, 'Admins sofort benachrichtigen', 'Popup, sobald ein Spieler 50 Punkte erreicht')}
         ${toggle('ac-autoBan', s.autoBan, 'Automatisch sperren', 'Sperrt 24 Std., sobald die Punkte die Grenze erreichen')}
         <label class="field"><span>Grenze für automatische Sperre (Punkte)</span><input type="number" id="ac-banAt" min="20" max="1000" value="${s.banAt}"></label></div>
       <div><h4 class="adm-h">Erkennungen</h4>${Object.entries(r.types).map(([k, t]) => toggle('det-' + k, s.detectors[k] !== false, t.label, `${t.w} Punkte`)).join('')}</div></div>

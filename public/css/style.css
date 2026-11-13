@@ -1093,3 +1093,55 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .ax-panel .adm-row, .ax-panel .adm-quick { flex-wrap: wrap; }
 .ax-panel .adm-row input { min-width: 0; flex: 1 1 140px; }
 .ax-panel .field input { width: 100%; }
+
+/* ================================================================ Abzeichen (Badges) – Glanz je Seltenheit */
+.bdg { --c1: #8a8f99; --c2: #c7cbd2; --glow: transparent; position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 30%;
+  background: linear-gradient(145deg, var(--c2), var(--c1)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -2px 0 rgba(0, 0, 0, .25), 0 0 0 1.5px rgba(0, 0, 0, .35), 0 0 12px var(--glow); overflow: hidden; vertical-align: middle; }
+.bdg i { font-style: normal; position: relative; z-index: 2; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .45)); line-height: 1; }
+.bdg-sm { width: 20px; height: 20px; } .bdg-sm i { font-size: 12px; }
+.bdg-md { width: 30px; height: 30px; } .bdg-md i { font-size: 17px; }
+.bdg-lg { width: 52px; height: 52px; } .bdg-lg i { font-size: 28px; }
+.bdg-xl { width: 110px; height: 110px; border-radius: 32%; } .bdg-xl i { font-size: 62px; }
+.bdg.r-common { --c1: #7a7f88; --c2: #c9ccd2; }
+.bdg.r-rare { --c1: #1d4ed8; --c2: #60a5fa; --glow: rgba(59, 130, 246, .55); }
+.bdg.r-epic { --c1: #6d28d9; --c2: #c084fc; --glow: rgba(168, 85, 247, .7); }
+.bdg.r-legendary { --c1: #b45309; --c2: #fde68a; --glow: rgba(251, 191, 36, .85); }
+.bdg.r-mythic { --glow: rgba(255, 79, 216, .8); background: linear-gradient(120deg, #ff4fd8, #7af7ff, #a3e635, #fde047, #ff4fd8, #7af7ff); background-size: 300% 300%; animation: bdgSpin 4s linear infinite; }
+/* Glanz-Streifen: ab Episch, Legendär schneller, Mythisch mit Funkeln */
+.bdg.r-epic::after, .bdg.r-legendary::after, .bdg.r-mythic::after { content: ""; position: absolute; inset: -40%; z-index: 1; background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, .75) 50%, transparent 60%); transform: translateX(-120%); animation: bdgShine 3.2s ease-in-out infinite; }
+.bdg.r-legendary::after { animation-duration: 2.2s; }
+.bdg.r-mythic::before { content: "✦"; position: absolute; z-index: 3; top: 4%; right: 10%; font-size: 40%; color: #fff; text-shadow: 0 0 4px #fff; animation: bdgTwinkle 1.4s ease-in-out infinite; }
+.bdg.r-rare { animation: bdgPulse 3s ease-in-out infinite; }
+.bdg.locked { background: rgba(255, 255, 255, .06) !important; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .1); animation: none !important; }
+.bdg.locked::after, .bdg.locked::before { display: none; }
+.bdg.locked i { filter: grayscale(1) opacity(.35); animation: none; }
+@keyframes bdgShine { 0%, 55% { transform: translateX(-120%); } 85%, 100% { transform: translateX(120%); } }
+@keyframes bdgSpin { from { background-position: 0% 50%; } to { background-position: 300% 50%; } }
+@keyframes bdgTwinkle { 0%, 100% { opacity: .2; transform: scale(.6); } 50% { opacity: 1; transform: scale(1.2); } }
+@keyframes bdgPulse { 0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 0 1.5px rgba(0, 0, 0, .35), 0 0 4px var(--glow); } 50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 0 1.5px rgba(0, 0, 0, .35), 0 0 14px var(--glow); } }
+.bdg-row { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
+/* Profilkarte: Top 3 mit Namen */
+.pc-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
+.pc-badges .bdg { width: auto; height: auto; padding: 4px 10px 4px 4px; border-radius: 99px; display: inline-flex; gap: 7px; overflow: hidden; }
+.pc-badges .bdg i { width: 26px; height: 26px; display: grid; place-items: center; font-size: 16px; }
+.pc-badges .bdg b { position: relative; z-index: 2; font-size: 13px; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.pc-badges .bdg small { position: relative; z-index: 2; font-size: 10px; color: rgba(255, 255, 255, .85); text-transform: uppercase; letter-spacing: .05em; }
+.pc-bcount { font-size: 12px; color: var(--muted); }
+/* Sammlung im eigenen Profil */
+.badge-card { margin-bottom: 20px; }
+.badge-tier h4 { margin: 14px 0 8px; font-size: 14px; }
+.r-mythic-txt { background: linear-gradient(90deg, #ff4fd8, #7af7ff, #fde047); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.r-legendary-txt { color: #fbbf24; } .r-epic-txt { color: #c084fc; } .r-rare-txt { color: #60a5fa; } .r-common-txt { color: #c9ccd2; }
+.badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.badge-item { display: grid; justify-items: center; gap: 4px; padding: 12px 8px; border-radius: 14px; background: rgba(255, 255, 255, .03); text-align: center; border: 1px solid transparent; }
+.badge-item.has { background: rgba(255, 255, 255, .06); border-color: var(--line); }
+.badge-item b { font-size: 13px; } .badge-item small { font-size: 11px; color: var(--muted); }
+.badge-item:not(.has) b { color: var(--muted); }
+/* Freischalt-Popup */
+.badge-pop { position: relative; display: grid; justify-items: center; gap: 6px; text-align: center; padding-top: 10px; }
+.badge-pop h2 { margin: 4px 0 0; }
+.badge-pop .bdg-xl { animation: bdgPop .7s cubic-bezier(.2, 1.6, .4, 1) both; }
+.badge-pop.r-mythic .bdg-xl { animation: bdgPop .7s cubic-bezier(.2, 1.6, .4, 1) both, bdgSpin 4s linear infinite; }
+.bp-glow { position: absolute; top: -20px; width: 220px; height: 220px; border-radius: 50%; background: radial-gradient(circle, var(--g, rgba(255, 255, 255, .25)), transparent 65%); pointer-events: none; }
+.badge-pop.r-rare { --g: rgba(59, 130, 246, .45); } .badge-pop.r-epic { --g: rgba(168, 85, 247, .5); } .badge-pop.r-legendary { --g: rgba(251, 191, 36, .55); } .badge-pop.r-mythic { --g: rgba(255, 79, 216, .55); }
+@keyframes bdgPop { from { transform: scale(.2) rotate(-25deg); opacity: 0; } }

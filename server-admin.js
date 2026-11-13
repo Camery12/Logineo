@@ -5,23 +5,24 @@ import { BOARDS, PIECES, FINISHERS, SHAPES, BOTS, findItem } from './public/js/c
 
 const DAY = 86_400_000, HOUR = 3_600_000;
 const AC_WINDOW = 14 * DAY; // Verdachtspunkte zählen 14 Tage
+// Nur eindeutige Muster geben Punkte. Ein Fall entsteht erst ab CASE_AT Punkten – ein einzelnes schwaches Signal reicht nie.
+// Bewusst NICHT mehr erkannt: gleiche Verbindung allein (Schule/Familie im selben WLAN), schnelle Fortschritte von Anfängern,
+// viele Bot-Siege (ist normales Spielen) und Partien unter Freunden, die ausgespielt werden.
+export const CASE_AT = 50;
 export const AC_TYPES = {
-  sameip: { label: 'Gleiche Internet-Verbindung wie der Gegner (Zweitkonto?)', w: 40 },
-  'sameip-team': { label: 'Mehrere Konten mit gleicher Verbindung im selben 2v2/4er-Spiel', w: 25 },
-  'farm-pair': { label: 'Elo-Farming: viele sehr kurze oder früh aufgegebene Siege gegen denselben Gegner', w: 30 },
-  feeder: { label: 'Füttert Elo: verliert auffällig oft schnell gegen dieselben Gegner', w: 25 },
-  'new-feeder': { label: 'Neues Konto verliert mehrfach gegen denselben Spieler', w: 20 },
-  'elo-spike': { label: 'Ungewöhnlich viel Elo in 24 Stunden gewonnen', w: 20 },
-  'upset-streak': { label: 'Siegesserie gegen deutlich stärkere Gegner', w: 15 },
-  'move-times': { label: 'Auffällig gleichmäßige, schnelle Zugzeiten (Engine-Verdacht)', w: 15 },
-  'bot-farm': { label: 'Sehr viele Bot-Siege in kurzer Zeit (Münz-Farming)', w: 20 },
-  'bot-hugo': { label: 'Sieg gegen Hugo (Legende) – Engine-Verdacht', w: 25 },
-  'bot-fast': { label: 'Bot-Partien in unmöglich kurzer Zeit beendet', w: 20 },
+  'farm-pair': { label: 'Elo-Farming: immer wieder sehr kurze oder sofort aufgegebene Siege gegen denselben Gegner', w: 60 },
+  feeder: { label: 'Elo-Spender: verliert immer wieder absichtlich schnell gegen denselben Spieler', w: 50 },
+  sameip: { label: 'Farming zwischen Konten mit gleicher Verbindung (wahrscheinlich Zweitkonto)', w: 40 },
+  'elo-spike': { label: 'Extrem viel Elo an einem Tag (über 400) auf hohem Niveau', w: 25 },
+  'upset-streak': { label: '8 Siege in Folge gegen viel stärkere Gegner (300+ Elo)', w: 25 },
+  'move-times': { label: 'Roboterhaft gleichmäßige Zugzeiten beim Sieg gegen einen stärkeren Gegner (Engine-Verdacht)', w: 25 },
+  'bot-hugo': { label: 'Hugo (Legende) sehr schnell besiegt – Engine-Verdacht', w: 25 },
+  'bot-fast': { label: 'Bot-Partie schneller beendet als technisch möglich (manipuliertes Spiel)', w: 60 },
 };
 export const DEFAULT_SETTINGS = {
   coinMult: 1, coinMultUntil: 0, shopDiscount: 0, banner: '', maintenance: false, maintenanceText: 'Wartungsarbeiten – Online-Spiele sind kurz pausiert.',
   randomOff: false, fourOff: false, chatMute: false, startCoins: null,
-  ac: { enabled: true, autoUnrate: true, autoBan: false, banAt: 120, notify: true, detectors: Object.fromEntries(Object.keys(AC_TYPES).map((k) => [k, true])) },
+  ac: { enabled: true, autoUnrate: true, autoBan: false, banAt: 150, notify: true, detectors: Object.fromEntries(Object.keys(AC_TYPES).map((k) => [k, true])) },
 };
 
 export function setupAdmin(ctx) {
@@ -42,6 +43,12 @@ export function setupAdmin(ctx) {
     adminLog = (await chatLoad('__adminlog').catch(() => [])) || [];
     chatBlocks = (await chatLoad('__chatblocks').catch(() => [])) || [];
     for (const u of Object.values(db.users)) for (const h of u.ips || []) addIp(h, u.id);
+    if (!settings.acRulesV2) {
+      let n = 0;
+      for (const u of Object.values(db.users)) for (const f of u.ac?.flags || []) if (!f.cleared) { f.cleared = { at: Date.now(), by: 'System (neue, fairere Regeln)' }; n++; }
+      settings.acRulesV2 = true; await persistSettings(); save();
+      if (n) console.log(`🛡️ Anti-Cheat: ${n} alte Hinweise nach den neuen Regeln erledigt`);
+    }
   }
   const persistSettings = () => chatStore('__settings', settings).catch((e) => console.error('Einstellungen:', e.message));
   let logTimer = null;
@@ -104,11 +111,12 @@ export function setupAdmin(ctx) {
     u.ac ||= { flags: [] };
     // derselbe Typ höchstens einmal pro Stunde (sonst explodiert der Wert bei einer Serie)
     if (u.ac.flags.some((f) => f.type === type && !f.cleared && Date.now() - f.at < HOUR)) return;
+    const before = acScore(u);
     u.ac.flags.unshift({ id: crypto.randomUUID().slice(0, 8), type, detail: String(detail).slice(0, 200), gameId, at: Date.now() });
     u.ac.flags.length = Math.min(u.ac.flags.length, 60);
     const score = acScore(u);
     log(null, 'anticheat', u, `${AC_TYPES[type]?.label || type} – ${detail} (Punkte: ${score})`);
-    if (settings.ac.notify) for (const [uid] of online) if (isAdmin(db.users[uid])) emitTo(uid, 'admin:alert', { name: u.name, id: u.id, type, label: AC_TYPES[type]?.label, detail, score });
+    if (settings.ac.notify && score >= CASE_AT && before < CASE_AT) for (const [uid] of online) if (isAdmin(db.users[uid])) emitTo(uid, 'admin:alert', { name: u.name, id: u.id, type, label: AC_TYPES[type]?.label, detail, score });
     if (settings.ac.autoBan && score >= settings.ac.banAt && !banInfo(u)) {
       u.ban = { until: Date.now() + DAY, reason: 'Automatische Sperre: Verdacht auf Betrug (Anti-Cheat)', by: 'Anti-Cheat', at: Date.now() };
       emitTo(u.id, 'banned', banInfo(u));
@@ -125,8 +133,8 @@ export function setupAdmin(ctx) {
   // Vor der Wertung: harte Gründe, eine Partie nicht zu werten (zusätzlich zum Fair-Play-Check)
   function precheck(W, B, result, reason, plies) {
     if (!settings.ac.enabled || !settings.ac.autoUnrate || result === 'draw') return null;
-    if (settings.ac.detectors.sameip !== false && sameIp(W, B) && !W.acTrusted && !B.acTrusted) return 'Anti-Cheat: Beide Konten nutzen dieselbe Internet-Verbindung.';
-    if (!cheap(reason, plies)) return null; // echte Partie: wird immer gewertet
+    if (!cheap(reason, plies)) return null; // echte Partie: wird immer gewertet – auch im selben WLAN
+    if (settings.ac.detectors.sameip !== false && sameIp(W, B) && !W.acTrusted && !B.acTrusted && recent(result === 'w' ? W : B, DAY, (h) => h.type === 'online' && h.oppId === (result === 'w' ? B : W).id && cheapH(h)).length >= 1) return 'Anti-Cheat: Schon wieder eine sehr kurze Partie zwischen Konten mit derselben Verbindung.';
     const win = result === 'w' ? W : B, lose = result === 'w' ? B : W;
     const cheapWins = recent(win, DAY, (h) => h.type === 'online' && h.oppId === lose.id && h.outcome === 'win' && cheapH(h)).length;
     if (settings.ac.detectors['farm-pair'] !== false && cheapWins >= 2 && !win.acTrusted) return 'Anti-Cheat: Schon wieder eine sehr kurze oder früh aufgegebene Partie gegen denselben Gegner. Echte, ausgespielte Partien werden normal gewertet.';
@@ -143,42 +151,37 @@ export function setupAdmin(ctx) {
   }
   // Nach der Partie: Muster erkennen und Verdachtspunkte vergeben
   function afterOnline(g, result, W, B) {
-    if (!settings.ac.enabled) return;
-    if (sameIp(W, B)) { flag(W, 'sameip', `gegen ${B.name}`, g.id); flag(B, 'sameip', `gegen ${W.name}`, g.id); }
-    if (result === 'draw') return;
+    if (!settings.ac.enabled || result === 'draw') return;
     const win = result === 'w' ? W : B, lose = result === 'w' ? B : W, wc = result;
-    // nur kurze/früh aufgegebene Siege zählen als Farming – lange, echte Partien nicht
-    const pairCheap = recent(win, DAY, (h) => h.type === 'online' && h.oppId === lose.id && h.outcome === 'win' && cheapH(h)).length;
-    if (pairCheap >= 3) {
-      flag(win, 'farm-pair', `${pairCheap} sehr kurze oder früh aufgegebene Siege gegen ${lose.name} in 24 Std.`, g.id);
-      flag(lose, 'feeder', `${pairCheap} sehr kurze oder früh aufgegebene Niederlagen gegen ${win.name} in 24 Std.`, g.id);
+    // Farming: mind. 4 billige Siege gegen denselben Gegner in 24 Std. UND das ist fast alles, was die beiden gespielt haben
+    const pair = recent(win, DAY, (h) => h.type === 'online' && h.oppId === lose.id);
+    const pairCheap = pair.filter((h) => h.outcome === 'win' && cheapH(h)).length;
+    if (pairCheap >= 4 && pairCheap / pair.length >= 0.75) {
+      flag(win, 'farm-pair', `${pairCheap} von ${pair.length} Partien gegen ${lose.name} in 24 Std. waren sehr kurz oder sofort aufgegeben`, g.id);
+      flag(lose, 'feeder', `hat ${pairCheap}× sehr schnell gegen ${win.name} verloren (24 Std.)`, g.id);
+      if (sameIp(win, lose)) { flag(win, 'sameip', `mit ${lose.name}`, g.id); flag(lose, 'sameip', `mit ${win.name}`, g.id); }
     }
-    const quickLosses = recent(lose, DAY, (h) => h.type === 'online' && h.outcome === 'loss' && cheapH(h));
-    if (quickLosses.length >= 5) flag(lose, 'feeder', `${quickLosses.length} schnelle Niederlagen in 24 Std.`, g.id);
-    if (Date.now() - (lose.createdAt || 0) < DAY && recent(lose, DAY, (h) => h.oppId === win.id && h.outcome === 'loss').length >= 2) flag(lose, 'new-feeder', `Konto jünger als 1 Tag, verliert gegen ${win.name}`, g.id);
-    const gain = recent(win, DAY, (h) => h.type === 'online').reduce((s, h) => s + (h.rating || 0), 0);
-    if (gain >= 150) flag(win, 'elo-spike', `+${gain} Elo in 24 Std.`, g.id);
-    const lastWins = (win.history || []).filter((h) => h.type === 'online').slice(0, 5);
-    if (lastWins.length === 5 && lastWins.every((h) => h.outcome === 'win' && (h.oppRating ?? 0) - (h.myRating ?? 0) >= 200)) flag(win, 'upset-streak', '5 Siege in Folge gegen 200+ Elo stärkere Gegner', g.id);
+    // Riesiger Elo-Sprung – nur auf hohem Niveau (Anfänger steigen am Anfang immer schnell)
+    const gain = recent(win, DAY, (h) => h.type === 'online' && !h.unrated).reduce((s, h) => s + (h.rating || 0), 0);
+    if (gain >= 400 && win.rating >= 1000) flag(win, 'elo-spike', `+${gain} Elo in 24 Std. (jetzt ${win.rating})`, g.id);
+    const last = (win.history || []).filter((h) => h.type === 'online' && !h.unrated).slice(0, 8);
+    if (last.length === 8 && last.every((h) => h.outcome === 'win' && (h.oppRating ?? 0) >= 800 && (h.oppRating ?? 0) - (h.myRating ?? 0) >= 300)) flag(win, 'upset-streak', '8 Siege in Folge gegen 300+ Elo stärkere Gegner', g.id);
+    // Engine-Verdacht: lange Partie, sehr gleichmäßige Zeiten, Sieg gegen klar stärkeren Gegner
     const t = g.moveTimes?.[wc] || [];
-    if (t.length >= 20) {
+    if (t.length >= 30 && (lose.rating - win.rating) >= 200) {
       const mean = t.reduce((a, b) => a + b, 0) / t.length;
       const sd = Math.sqrt(t.reduce((a, b) => a + (b - mean) ** 2, 0) / t.length);
-      if (mean < 4000 && sd / mean < 0.25) flag(win, 'move-times', `Ø ${(mean / 1000).toFixed(1)} s pro Zug, kaum Schwankung`, g.id);
+      if (mean >= 1000 && mean <= 8000 && sd / mean < 0.12) flag(win, 'move-times', `${t.length} Züge mit Ø ${(mean / 1000).toFixed(1)} s und kaum Schwankung, gegen ${lose.rating - win.rating} Elo Stärkere`, g.id);
     }
   }
   function afterBot(u, bot, outcome, moves, startedAt) {
     if (!settings.ac.enabled || outcome !== 'win') return;
-    const wins = recent(u, HOUR, (h) => h.type === 'bot' && h.outcome === 'win');
-    if (wins.length >= 10) flag(u, 'bot-farm', `${wins.length} Bot-Siege in 1 Std.`);
-    if (bot.legend) flag(u, 'bot-hugo', `Sieg gegen ${bot.name} in ${moves} Halbzügen`);
+    if (bot.legend && moves < 60) flag(u, 'bot-hugo', `${bot.name} in nur ${moves} Halbzügen besiegt`);
+    // Bots warten bei jedem Zug mindestens 0,45 s – schneller geht es nur mit einem manipulierten Spiel
     if (startedAt && Date.now() - startedAt < moves * 150) flag(u, 'bot-fast', `${moves} Halbzüge in ${Math.round((Date.now() - startedAt) / 1000)} s`);
   }
-  function afterFour(g) {
-    if (!settings.ac.enabled) return;
-    const humans = g.players.filter((p) => p.uid).map((p) => db.users[p.uid]).filter(Boolean);
-    for (const a of humans) for (const b of humans) if (a !== b && sameIp(a, b)) flag(a, 'sameip-team', `mit ${b.name}`, g.id);
-  }
+  function afterFour() { /* gemeinsam im selben WLAN 2v2 spielen ist normal – keine Hinweise */ }
+
 
   // ------------------------------------------------------------ Hilfen fürs Panel
   const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
@@ -200,7 +203,7 @@ export function setupAdmin(ctx) {
 
     // ---- Anti-Cheat
     on('ac:list', async ({ all = false }, ack) => {
-      const list = Object.values(db.users).filter((u) => (u.ac?.flags || []).some((f) => all || (!f.cleared && Date.now() - f.at < AC_WINDOW)))
+      const list = Object.values(db.users).filter((u) => (all ? (u.ac?.flags || []).length : acScore(u) >= CASE_AT))
         .map((u) => ({ ...brief(u), flags: (u.ac.flags || []).filter((f) => all || !f.cleared).slice(0, 20).map((f) => ({ ...f, label: AC_TYPES[f.type]?.label || f.type })), note: u.ac.note || '' }))
         .sort((a, b) => b.acScore - a.acScore).slice(0, 200);
       ack?.({ list, settings: settings.ac, types: AC_TYPES });
@@ -258,9 +261,12 @@ export function setupAdmin(ctx) {
       // Alle Spieler über ihren Verlauf neu prüfen (Paar-Farming & Feeder)
       let flagged = 0;
       for (const u of Object.values(db.users)) {
-        const byOpp = count(recent(u, 7 * DAY, (h) => h.type === 'online' && h.outcome === 'win' && cheapH(h)), (h) => h.oppId);
-        for (const [opp, n] of Object.entries(byOpp)) if (n >= 5) { const o = db.users[opp]; flag(u, 'farm-pair', `${n} kurze/früh aufgegebene Siege gegen ${o?.name || '?'} in 7 Tagen (Scan)`); if (o) flag(o, 'feeder', `${n} kurze/früh aufgegebene Niederlagen gegen ${u.name} in 7 Tagen (Scan)`); flagged++; }
-        for (const s of ipSiblings(u)) if (recent(u, 7 * DAY, (h) => h.oppId === s.id).length) { flag(u, 'sameip', `spielt gegen ${s.name} mit gleicher Verbindung (Scan)`); flagged++; }
+        const games = recent(u, 7 * DAY, (h) => h.type === 'online');
+        const byOpp = count(games.filter((h) => h.outcome === 'win' && cheapH(h)), (h) => h.oppId);
+        for (const [opp, n] of Object.entries(byOpp)) {
+          const all = games.filter((h) => h.oppId === opp).length;
+          if (n >= 6 && n / all >= 0.75) { const o = db.users[opp]; flag(u, 'farm-pair', `${n} von ${all} Partien gegen ${o?.name || '?'} in 7 Tagen sehr kurz (Scan)`); if (o) flag(o, 'feeder', `${n}× sehr schnell gegen ${u.name} verloren (Scan)`); flagged++; }
+        }
       }
       log(me, 'ac-scan', null, `${flagged} Treffer`); ack?.({ ok: true, flagged });
     });
@@ -455,7 +461,7 @@ export function setupAdmin(ctx) {
       if (what === 'log') return ack?.({ name: 'admin-log.json', mime: 'application/json', data: JSON.stringify(adminLog, null, 1) });
       ack?.({ error: 'Unbekannter Export.' });
     });
-    on('adm:openCases', async (_, ack) => ack?.({ n: Object.values(db.users).filter((u) => acScore(u) >= 30).length }));
+    on('adm:openCases', async (_, ack) => ack?.({ n: Object.values(db.users).filter((u) => acScore(u) >= CASE_AT).length }));
   }
 
   return { init, register, log, onConnect, onDisconnect, precheck, eloFactor, afterOnline, afterBot, afterFour, coins, price, playBlock, chatBlock, blockedChat, startCoins, publicSettings, acScore };

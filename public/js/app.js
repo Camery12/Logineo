@@ -5,7 +5,8 @@ import { pieceURL } from './pieces.js';
 import { BOARDS, PIECES, FINISHERS, BUNDLES, BOTS, REWARDS, AVATAR_EMOJIS, AVATAR_COLORS, findItem, bundlePrice, PROFILE_OPTIONS, MUSIC_MAX_BYTES, eloText, SHAPES, pieceLook } from './catalog.js';
 import { sound } from './sound.js';
 import { VERSION, VERSION_DATE, CHANGELOG } from './version.js';
-import { profileCardHTML, wireProfileMusic, stopProfileMusic, fmtPlaytime } from './profilecard.js';
+import { profileCardHTML, wireProfileMusic, stopProfileMusic, fmtPlaytime, badgeHTML, topBadgesHTML } from './profilecard.js';
+import { BADGES, RARITIES, findBadge } from './catalog.js';
 import { burstAt, shakeBoard, checkFlash, confetti, coinRain, shatterPiece, preloadPieces, tableFlip, resetThrown } from './fx.js';
 import { FourBoard } from './fourboard.js';
 import { COLOR_NAMES, COLOR_HEX, TEAM_NAMES } from './four.js';
@@ -35,7 +36,7 @@ const timeAgo = (t) => {
 // Spieler mit seinem Profil-Look (Mini-Banner, Rahmen, Namenseffekt) – z. B. in der Rangliste
 const styledWho = (u, size, extra = '') => {
   const st = u.style || {};
-  return `<div class="lb-who bn-${st.banner || 'standard'}" style="--acc:${st.accent || '#7c5cff'}"><span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(u.avatar, size)}</span><span class="lb-name nf-${st.nameFx || 'keiner'}" data-text="${esc(u.name)}">${esc(u.name)}</span>${extra}</div>`;
+  return `<div class="lb-who bn-${st.banner || 'standard'}" style="--acc:${st.accent || '#7c5cff'}"><span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(u.avatar, size)}</span><span class="lb-name nf-${st.nameFx || 'keiner'}" data-text="${esc(u.name)}">${esc(u.name)}</span>${u.badges?.length ? `<span class="bdg-row">${topBadgesHTML(u.badges)}</span>` : ''}${extra}</div>`;
 };
 const avatar = (a, size = 40) => {
   if (!a) return `<span class="avatar" style="--s:${size}px"></span>`;
@@ -160,6 +161,8 @@ socket.on('stats', (s) => { const liveBefore = state.stats.live; state.stats = s
 socket.on('toast', (t) => toast(esc(t.text), t.type));
 
 function setProfile(p, { coinsAnim = false } = {}) {
+  const hadBadges = state.profile?.allBadges;
+  if (hadBadges && p.allBadges) for (const id of p.allBadges.filter((x) => !hadBadges.includes(x))) setTimeout(() => celebrateBadge(id), 1200);
   const before = state.profile?.coins;
   const skinsBefore = JSON.stringify(state.profile?.equipped || {});
   state.profile = p;
@@ -223,6 +226,17 @@ async function updateAdminBadge() {
   btn.title = r.n ? `Admin-Menü – ${r.n} offene Anti-Cheat-Fälle` : 'Admin-Menü';
 }
 function openPlayerTab(q) { state.adminPlayer = q; renderAdmin('players'); }
+
+// Neues Abzeichen freigeschaltet
+function celebrateBadge(id) {
+  const b = findBadge(id); if (!b) return;
+  sound.win();
+  const ov = openOverlay(`<div class="badge-pop r-${b.rarity}"><div class="bp-glow"></div>${badgeHTML(id, { size: 'xl' })}
+    <div class="muted small">Neues Abzeichen · ${RARITIES[b.rarity].name}</div><h2>${esc(b.name)}</h2><p class="muted">${esc(b.desc)}</p>
+    <div class="modal-actions"><button class="btn primary" data-x>Super!</button></div></div>`);
+  $('[data-x]', ov.el).onclick = ov.close;
+  if (RARITIES[b.rarity].rank >= 3) confetti();
+}
 
 function renderFooter() {
   const p = state.profile;
@@ -399,7 +413,7 @@ async function adminOverview(box) {
       ${tile(r.matches.total != null ? fmtNum(r.matches.total) : '–', 'Partien im Archiv', `${r.matches.today ?? '–'} heute`)}
       ${tile(fmtNum(r.coins), 'Münzen im Umlauf')}
       ${tile(r.banned, 'gesperrt')}
-      <div class="adm-tile clickable" data-goto="anticheat" id="ov-cases"><b>…</b><span>🛡️ offene Anti-Cheat-Fälle</span><small>ab 30 Punkten</small></div>
+      <div class="adm-tile clickable" data-goto="anticheat" id="ov-cases"><b>…</b><span>🛡️ offene Anti-Cheat-Fälle</span><small>ab 50 Punkten</small></div>
     </div>
     <div class="adm-tops"><div><h4>💰 Reichste Spieler</h4><ol class="adm-top">${top(r.topCoins, 'Münzen')}</ol></div><div><h4>🏆 Höchstes Elo</h4><ol class="adm-top">${top(r.topElo, 'Elo')}</ol></div></div>`;
   $$('li[data-uid]', box).forEach((li) => li.onclick = () => showPlayerProfile(li.dataset.uid));
@@ -1652,7 +1666,7 @@ function renderBar(el, player, color, { clock = null, thinking = false, tag = ''
   const st = player.style || {};
   el.style.setProperty('--acc', st.accent || '#7c5cff');
   el.innerHTML = `<span class="mini-fr fr-${st.frame || 'keiner'}">${avatar(player.avatar, 44)}</span>
-    <div><div class="pname"><span class="nf-${st.nameFx || 'keiner'}" data-text="${esc(player.name)}">${esc(player.name)}</span>${st.admin ? '<span class="admin-tag">ADMIN</span>' : ''} ${tag ? `<span class="tag">${tag}</span>` : ''} <span class="prating">${player.rating ?? ''} Elo</span></div>
+    <div><div class="pname"><span class="nf-${st.nameFx || 'keiner'}" data-text="${esc(player.name)}">${esc(player.name)}</span>${st.admin ? '<span class="admin-tag">ADMIN</span>' : ''}${player.badges?.length ? `<span class="bdg-row">${topBadgesHTML(player.badges)}</span>` : ''} ${tag ? `<span class="tag">${tag}</span>` : ''} <span class="prating">${player.rating ?? ''} Elo</span></div>
     <div class="caps">${cap.taken(color).map(([t, c]) => `<i style="background-image:${pieceURL(t, c, skinFor(c)).replace(/"/g, '&quot;')}"></i>`).join('')}${diff > 0 ? `<b>+${diff}</b>` : ''}</div></div>
     ${thinking ? '<div class="thinking"><span class="spinner"></span>denkt nach…</div>' : ''}
     ${clock !== null ? `<div class="clock" data-c="${color}">${clock}</div>` : ''}`;
@@ -2496,6 +2510,11 @@ function renderProfile() {
       <div class="stat"><b>${s.botWins}</b><span>Bot-Siege</span></div>
       <div class="stat"><b>${s.mates}</b><span>Schachmatts gesetzt</span></div>
       <div class="stat"><b style="color:var(--gold)">${fmtNum(p.coins)}</b><span>Münzen</span></div>
+    </div>
+    <div class="card badge-card">
+      <div class="card-head"><h3>🏅 Abzeichen <span class="muted small">${(p.allBadges || []).length} / ${BADGES.length}</span></h3><span class="muted small">Deine 3 seltensten werden an deinem Profil, im Spiel und in der Rangliste gezeigt.</span></div>
+      ${Object.keys(RARITIES).reverse().map((r) => { const list = BADGES.filter((b) => b.rarity === r); return `<div class="badge-tier"><h4 class="r-${r}-txt">${RARITIES[r].name} <span class="muted small">${list.filter((b) => (p.allBadges || []).includes(b.id)).length}/${list.length}</span></h4>
+        <div class="badge-grid">${list.map((b) => { const has = (p.allBadges || []).includes(b.id); return `<div class="badge-item ${has ? 'has' : ''}">${badgeHTML(b.id, { size: 'lg', locked: !has })}<b>${esc(b.name)}</b><small>${has ? '✔ ' : '🔒 '}${esc(b.desc)}</small>${(p.badges || []).includes(b.id) ? '<span class="tag">am Profil</span>' : ''}</div>`; }).join('')}</div></div>`; }).join('')}
     </div>
     <div class="profile-grid">
       <div class="card" id="avatar-card">

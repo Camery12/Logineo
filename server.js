@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import compression from 'compression';
 import { Chess } from 'chess.js';
-import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, pieceLook, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
+import { REWARDS, BOTS, BUNDLES, findItem, bundlePrice, pieceLook, computeBadges, AVATAR_EMOJIS, AVATAR_COLORS, PROFILE_OPTIONS, DEFAULT_CUSTOM, MUSIC_MAX_BYTES } from './public/js/catalog.js';
 import { checkUsername, badWord, badChat } from './public/js/censor.js';
 import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
@@ -188,7 +188,17 @@ function ensureShape(u) {
   if (!u.equipped.shape || !u.owned.shape.includes(u.equipped.shape)) u.equipped.shape = 'klassisch';
   return u;
 }
-const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins }, style: styleOf(u) });
+// Ranglisten-Platz (für Abzeichen) – alle 20 s neu berechnet
+let rankCache = { at: 0, map: new Map() };
+function rankOf(id) {
+  if (Date.now() - rankCache.at > 20_000) {
+    const list = Object.values(db.users).filter((u) => u.stats.games > 0).sort((a, b) => b.rating - a.rating || b.stats.wins - a.stats.wins);
+    rankCache = { at: Date.now(), map: new Map(list.map((u, i) => [u.id, i + 1])) };
+  }
+  return rankCache.map.get(id) || 0;
+}
+const badgesOf = (u) => computeBadges(u, { rank: rankOf(u.id) });
+const pub = (u) => ({ id: u.id, name: u.name, avatar: u.avatar, rating: u.rating, equipped: u.equipped, registered: !!u.pass, stats: { games: u.stats.games, wins: u.stats.wins }, style: styleOf(u), badges: badgesOf(u).slice(0, 3) });
 const styleOf = (u) => { const c = customOf(u); return { frame: c.frame, nameFx: c.nameFx, banner: c.banner === 'bild' ? 'standard' : c.banner, accent: c.accent, admin: isAdmin(u) }; };
 // Admins: per Spielercode (fest, nicht änderbar). Weitere über ADMIN_CODES="code1,code2" bei Render.
 const ADMIN_CODES = new Set(String(process.env.ADMIN_CODES || '58525408').split(',').map((s) => s.trim()).filter(Boolean));
@@ -203,9 +213,10 @@ function customOf(u) {
   return c;
 }
 const musicMeta = (u) => (u.music ? { title: u.music.title, volume: u.music.volume, at: u.music.at } : null);
-const priv = (u) => ({ ...pub(u), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30), admin: isAdmin(u), custom: customOf(u), playMs: u.playMs || 0, music: musicMeta(u) });
+const priv = (u) => ({ ...pub(u), allBadges: (u.maxCoins = Math.max(u.maxCoins || 0, u.coins || 0), badgesOf(u)), code: u.code, coins: u.coins, owned: u.owned, stats: u.stats, history: u.history.slice(0, 30), admin: isAdmin(u), custom: customOf(u), playMs: u.playMs || 0, music: musicMeta(u) });
 // Öffentliches Profil (zum Anklicken in Rangliste / Match)
 const publicProfile = (u) => ({
+  allBadges: badgesOf(u),
   custom: customOf(u), playMs: u.playMs || 0, music: musicMeta(u), inventory: customOf(u).showInventory ? u.owned : null,
   ...pub(u), stats: { ...u.stats }, createdAt: u.createdAt, online: online.has(u.id),
   history: u.history.slice(0, 8).map((h) => ({ type: h.type, opponent: h.opponent, oppAvatar: h.oppAvatar, outcome: h.outcome, reason: h.reason, rating: h.rating, at: h.at })),
@@ -1905,7 +1916,7 @@ io.on('connection', (socket) => {
     user.lastBotAt = now;
     user.coins += coins;
     user.stats.botGames++;
-    if (outcome === 'win') { user.stats.botWins++; user.stats.mates++; }
+    if (outcome === 'win') { user.stats.botWins++; user.stats.mates++; if (!(user.botsBeaten ||= []).includes(bot.id)) user.botsBeaten.push(bot.id); }
     ensureVs(user);
     const hEntry = { type: 'bot', matchId, opponent: bot.name, oppAvatar: { type: 'emoji', value: bot.avatar, color: bot.color }, outcome, reason, coins, rating: 0, moves: moves.length, at: now };
     addVs(user, hEntry);

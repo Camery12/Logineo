@@ -222,3 +222,55 @@ export const PROFILE_OPTIONS = {
 export const DEFAULT_CUSTOM = { banner: 'standard', frame: 'keiner', nameFx: 'keiner', particles: 'keine', accent: '#7c5cff', bio: '', showInventory: true, showcase: null, bannerImg: null };
 export const MUSIC_MAX_BYTES = 3_000_000;   // 3 MB (≈ 2–3 Min. MP3)
 export const MUSIC_MAX_VOLUME = 0.35;       // Lautstärke-Limit für Profilsongs
+
+// ---------------------------------------------------------------- Abzeichen (Badges): 25 Stück in 5 Seltenheitsstufen
+export const RARITIES = {
+  common: { name: 'Gewöhnlich', rank: 1 },
+  rare: { name: 'Selten', rank: 2 },
+  epic: { name: 'Episch', rank: 3 },
+  legendary: { name: 'Legendär', rank: 4 },
+  mythic: { name: 'Mythisch', rank: 5 },
+};
+// test(u, ctx): ctx = { rank } (Platz in der Rangliste, 0 = nicht drin)
+const botWon = (u, id) => (u.botsBeaten || []).includes(id) || (u.vsBot?.[BOTS.find((b) => b.id === id)?.name]?.w || 0) > 0;
+const bestStreak = (u) => { let best = 0, cur = 0; for (const h of [...(u.history || [])].reverse()) { if (h.type !== 'online' || h.unrated) continue; cur = h.outcome === 'win' ? cur + 1 : 0; best = Math.max(best, cur); } return Math.max(best, u.bestStreak || 0); };
+const ownedCount = (u) => ['board', 'pieces', 'finisher', 'shape'].reduce((s, k) => s + (u.owned?.[k]?.length || 0), 0);
+export const BADGES = [
+  // Rangliste
+  { id: 'rank1', icon: '👑', name: 'Nummer 1', rarity: 'mythic', desc: 'Platz 1 der Rangliste.', test: (u, c) => c.rank === 1 },
+  { id: 'top3', icon: '🥇', name: 'Top 3', rarity: 'legendary', desc: 'Unter den besten 3 der Rangliste.', test: (u, c) => c.rank >= 1 && c.rank <= 3 },
+  { id: 'top10', icon: '🏅', name: 'Top 10', rarity: 'epic', desc: 'Unter den besten 10 der Rangliste.', test: (u, c) => c.rank >= 1 && c.rank <= 10 },
+  // Elo
+  { id: 'elo500', icon: '📈', name: 'Aufsteiger', rarity: 'common', desc: '500 Elo erreicht.', test: (u) => u.rating >= 500 },
+  { id: 'elo1000', icon: '⚔️', name: 'Kämpfer', rarity: 'rare', desc: '1.000 Elo erreicht.', test: (u) => u.rating >= 1000 },
+  { id: 'elo1500', icon: '🛡️', name: 'Meister', rarity: 'epic', desc: '1.500 Elo erreicht.', test: (u) => u.rating >= 1500 },
+  { id: 'elo2000', icon: '🌟', name: 'Großmeister', rarity: 'legendary', desc: '2.000 Elo erreicht.', test: (u) => u.rating >= 2000 },
+  // Bots
+  { id: 'bot2', icon: '👨‍🌾', name: 'Bauernschreck', rarity: 'common', desc: 'Bauer Bernd besiegt.', test: (u) => botWon(u, 2) },
+  { id: 'bot3', icon: '🐴', name: 'Springer-Jäger', rarity: 'rare', desc: 'Springer Sam besiegt.', test: (u) => botWon(u, 3) },
+  { id: 'bot4', icon: '🦊', name: 'Fuchsfänger', rarity: 'rare', desc: 'Läufer Lena besiegt.', test: (u) => botWon(u, 4) },
+  { id: 'bot5', icon: '🏰', name: 'Turmstürmer', rarity: 'epic', desc: 'Turm Theo besiegt.', test: (u) => botWon(u, 5) },
+  { id: 'bot6', icon: '👸', name: 'Damenbezwinger', rarity: 'legendary', desc: 'Dame Diana besiegt.', test: (u) => botWon(u, 6) },
+  { id: 'bot7', icon: '🧠', name: 'Hugos Albtraum', rarity: 'mythic', desc: 'Hugo, die Legende, besiegt.', test: (u) => botWon(u, 7) },
+  // Online
+  { id: 'firstwin', icon: '🎯', name: 'Erster Sieg', rarity: 'common', desc: 'Erste gewonnene Online-Partie.', test: (u) => u.stats.wins >= 1 },
+  { id: 'games50', icon: '♟️', name: 'Stammspieler', rarity: 'rare', desc: '50 Online-Partien gespielt.', test: (u) => u.stats.games >= 50 },
+  { id: 'wins100', icon: '💯', name: 'Hundert Siege', rarity: 'epic', desc: '100 Online-Partien gewonnen.', test: (u) => u.stats.wins >= 100 },
+  { id: 'streak5', icon: '🔥', name: 'Siegesserie', rarity: 'epic', desc: '5 Online-Siege hintereinander.', test: (u) => bestStreak(u) >= 5 },
+  { id: 'mates25', icon: '☠️', name: 'Mattsetzer', rarity: 'rare', desc: '25 Mal schachmatt gesetzt.', test: (u) => u.stats.mates >= 25 },
+  { id: 'teams10', icon: '🤝', name: 'Teamplayer', rarity: 'epic', desc: '10 Siege im 2 vs 2.', test: (u) => (u.stats.teams?.wins || 0) >= 10 },
+  { id: 'four5', icon: '👥', name: 'König der Vier', rarity: 'epic', desc: '5 Mal 4er-Schach gewonnen.', test: (u) => (u.stats.four?.wins || 0) >= 5 },
+  // Sammeln & Gemeinschaft
+  { id: 'rich', icon: '💰', name: 'Schatzmeister', rarity: 'rare', desc: '10.000 Münzen auf einmal besessen.', test: (u) => u.coins >= 10000 || (u.maxCoins || 0) >= 10000 },
+  { id: 'collector', icon: '🎨', name: 'Sammler', rarity: 'epic', desc: '25 Shop-Teile im Inventar.', test: (u) => ownedCount(u) >= 25 },
+  { id: 'friends10', icon: '👋', name: 'Beliebt', rarity: 'rare', desc: '10 Freunde.', test: (u) => (u.friends?.length || 0) >= 10 },
+  { id: 'play24', icon: '⏱️', name: 'Dauerbrenner', rarity: 'epic', desc: '24 Stunden auf SchachArena verbracht.', test: (u) => (u.playMs || 0) >= 24 * 3600_000 },
+  { id: 'veteran', icon: '🎂', name: 'Veteran', rarity: 'rare', desc: 'Seit 30 Tagen dabei.', test: (u) => Date.now() - (u.createdAt || Date.now()) >= 30 * 86_400_000 },
+];
+// Alle verdienten Abzeichen, seltenste zuerst (die ersten 3 werden am Profil gezeigt)
+export function computeBadges(u, ctx = {}) {
+  if (!u?.stats) return [];
+  return BADGES.filter((b) => { try { return b.test(u, ctx); } catch { return false; } })
+    .sort((a, b) => RARITIES[b.rarity].rank - RARITIES[a.rarity].rank || BADGES.indexOf(a) - BADGES.indexOf(b)).map((b) => b.id);
+}
+export const findBadge = (id) => BADGES.find((b) => b.id === id);

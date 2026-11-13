@@ -1,5 +1,5 @@
 // Cinematic-Profilkarte: Banner, Rahmen, Namenseffekt, Partikel, Bio, Spielzeit, Vitrine, Inventar, Profilsong
-import { findItem, PROFILE_OPTIONS, MUSIC_MAX_VOLUME, DEFAULT_CUSTOM, pieceLook } from './catalog.js';
+import { findItem, PROFILE_OPTIONS, MUSIC_MAX_VOLUME, DEFAULT_CUSTOM, pieceLook, findBadge, RARITIES, BADGES } from './catalog.js';
 import { pieceURL } from './pieces.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -29,6 +29,15 @@ function particlesHTML(kind) {
 }
 
 // u: öffentliches Profil (oder eigenes priv-Profil)
+// Abzeichen: Symbol mit Glanz je Seltenheit (size: 'sm' | 'md' | 'lg'), Name als Tooltip oder darunter
+export function badgeHTML(id, { size = 'sm', label = false, locked = false } = {}) {
+  const b = findBadge(id); if (!b) return '';
+  const tip = `${b.name} · ${RARITIES[b.rarity].name}\n${b.desc}`.replace(/"/g, '&quot;');
+  return `<span class="bdg bdg-${size} r-${b.rarity} ${locked ? 'locked' : ''}" title="${tip}"><i>${b.icon}</i>${label ? `<b>${b.name}</b><small>${RARITIES[b.rarity].name}</small>` : ''}</span>`;
+}
+export const topBadgesHTML = (ids, size = 'sm') => (ids || []).slice(0, 3).map((id) => badgeHTML(id, { size })).join('');
+export const BADGE_TOTAL = BADGES.length;
+
 export function profileCardHTML(u, { own = false } = {}) {
   const c = { ...DEFAULT_CUSTOM, ...(u.custom || {}) };
   const s = u.stats || {};
@@ -49,6 +58,7 @@ export function profileCardHTML(u, { own = false } = {}) {
       <div class="pc-av fr-${c.frame}">${avatarHTML(u.avatar, 104)}</div>
       <div class="pc-id">
         <h2 class="pc-name nf-${c.nameFx}" data-text="${esc(u.name)}">${esc(u.name)}</h2>
+        ${u.badges?.length ? `<div class="pc-badges">${u.badges.slice(0, 3).map((id) => badgeHTML(id, { size: 'md', label: true })).join('')}<span class="pc-bcount">🏅 ${(u.allBadges || u.badges).length}/${BADGES.length}</span></div>` : ''}
         <div class="pc-tags">${u.style?.admin ? '<span class="admin-tag">🛡️ ADMIN</span>' : ''}${u.registered ? '<span class="tag">Konto</span>' : '<span class="tag">Gast</span>'}${u.online ? '<span class="tag on"><i class="dot"></i> online</span>' : ''}<span class="tag">⏱️ ${fmtPlaytime(u.playMs)} gespielt</span></div>
         ${c.bio ? `<p class="pc-bio">„${esc(c.bio)}“</p>` : ''}
       </div>
