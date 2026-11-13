@@ -2541,7 +2541,7 @@ function renderProfile() {
   const p = state.profile; if (!p) return;
   const root = $('#view-profile');
   const s = p.stats;
-  const rate = s.games ? Math.round((s.wins / s.games) * 100) : 0;
+  const rate = s.games ? Math.min(100, Math.round((s.wins / s.games) * 100)) : 0;
   root.innerHTML = `
     <div class="card profile-head">
       <div class="avatar-wrap" id="av-edit" title="Profilbild ändern">${avatar(p.avatar, 112)}</div>

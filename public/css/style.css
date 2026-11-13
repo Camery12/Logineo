@@ -1252,3 +1252,8 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 .rl-bet.on { opacity: 1; border-color: #ffd54a; transform: translateY(-2px); box-shadow: 0 0 18px rgba(255, 213, 74, .5); }
 /* 9 Tabs unten auf dem Handy */
 @media (max-width: 760px) { .nav button { font-size: 9px; padding: 6px 1px; } .nav .ni { font-size: 18px; } }
+
+/* Firefox: Leiste unten/oben ohne Milchglas, dafür deckend – sonst scheint der Inhalt darunter durch */
+.nav, .topbar { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+@media (max-width: 1440px) { .nav { background: rgb(11, 13, 20) !important; } }
+.topbar { background: rgb(11, 13, 20); }

@@ -68,11 +68,12 @@ export function setupCasino({ save, priv, io }) {
   }
 
   function register(socket, getUser, need) {
-    let last = 0;
+    const recent = []; // höchstens 12 Casino-Aktionen pro Sekunde (schnelles Klicken bleibt möglich)
     const on = (ev, fn) => socket.on(ev, need(async (data = {}, ack) => {
-      const u = getUser();
-      if (Date.now() - last < 150) return ack?.({ error: 'Nicht so schnell.' });
-      last = Date.now();
+      const u = getUser(), now = Date.now();
+      while (recent.length && now - recent[0] > 1000) recent.shift();
+      if (recent.length >= 12) return ack?.({ error: 'Nicht so schnell.' });
+      recent.push(now);
       try { ack?.(fn(u, data || {})); } catch (e) { console.error('[casino]', e); ack?.({ error: 'Fehler im Casino.' }); }
     }));
     const done = (u, extra) => ({ ...extra, coins: u.coins, profile: priv(u) });

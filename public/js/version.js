@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.23.2';
+export const VERSION = '1.23.3';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.23.3', 'Firefox: Leiste unten ist wieder deckend (Inhalt schien durch). Casino: schnelles Klicken bei Mines wird nicht mehr blockiert'],
   ['1.23.2', 'Blitz-Paket kostet 3.000 Münzen (1.000 mehr als vorher), Blitz-Figuren und Gewitterfront wieder zum normalen Preis'],
   ['1.23.1', 'Wer 4× hintereinander aufgibt, wird 30 Minuten gesperrt (Warnung nach dem 3. Mal). Blitz-Paket kostet jetzt 2.000.000 Münzen, Blitz-Figuren und Gewitterfront einzeln ebenfalls das 1000-fache'],
   ['1.23.0', 'Neuer Casino-Tab mit Blackjack, Mines (20 Felder, 1–10 Bomben) und Roulette Rot/Schwarz/Grün – nur mit Spiel-Münzen. Bei Verbindungsabbruch gilt eine Partie jetzt nach 1 Minute als aufgegeben; wer an einem Tag 3× so ein Spiel verlässt, wird 12 Stunden gesperrt'],
