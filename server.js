@@ -139,6 +139,26 @@ function countLeave(uid) {
   }
   save();
 }
+// 4× hintereinander aufgegeben = verdächtig (Elo verschenken / Farming) -> 30 Min. Sperre
+const RESIGN_LIMIT = 4, RESIGN_BAN_MS = 30 * 60_000;
+function noteResign(uid, resigned) {
+  const u = db.users[uid]; if (!u) return;
+  if (!resigned) { if (u.resignStreak) { u.resignStreak = 0; save(); } return; }
+  u.resignStreak = (u.resignStreak || 0) + 1;
+  const n = u.resignStreak;
+  if (n >= RESIGN_LIMIT) {
+    u.resignStreak = 0;
+    if (!banInfo(u)) {
+      const now = Date.now();
+      u.ban = { until: now + RESIGN_BAN_MS, reason: `${n}× hintereinander aufgegeben – das sieht verdächtig aus`, by: 'System', at: now };
+      emitTo(uid, 'banned', banInfo(u));
+      adminApi.log(null, 'ban', u, `Automatisch 30 Min. gesperrt: ${n}× hintereinander aufgegeben`);
+    }
+  } else if (n === RESIGN_LIMIT - 1) {
+    emitTo(uid, 'toast', { type: 'warn', text: `⚠️ Du hast ${n}× hintereinander aufgegeben. Gibst du die nächste Partie auch auf, wirst du 30 Minuten gesperrt.` });
+  }
+  save();
+}
 let shuttingDown = false; // während eines Updates niemanden wegen Verbindungsabbruch rauswerfen
 const byToken = new Map();
 const byCode = new Map();
@@ -498,6 +518,7 @@ function endGame(g, result, reason) {
     u.coins += coins; u.rating = Math.max(0, u.rating + d);
     d = u.rating - before; // bei 0 Elo kann man nicht weiter fallen
     (g.arch ||= {})[color] = { id: u.id, name: u.name, ratingBefore: before, d, coins, outcome, counted: !(reason === 'abandon' && outcome === 'win') && !unrated, mate: outcome === 'win' && reason === 'checkmate' && !unrated };
+    noteResign(u.id, reason === 'resign' && outcome === 'loss');
     if (!(reason === 'abandon' && outcome === 'win') && !unrated) {
       u.stats.games++; u.stats[outcome === 'win' ? 'wins' : outcome === 'loss' ? 'losses' : 'draws']++;
     }
@@ -789,6 +810,7 @@ function endFour(g) {
   for (const [place, c] of ranking.entries()) {
     const uid = g.players[c].uid;
     if (!uid) continue;
+    if (reasons[c] !== 'resign') noteResign(uid, false); // normal zu Ende gespielt -> Aufgabe-Serie zurücksetzen
     const u = db.users[uid];
     // Fair-Play: mindestens 16 Halbzüge insgesamt und 3 eigene Züge
     const unrated = g.state.ply < 16 ? 'Zu kurz – die Partie hatte zu wenige Züge.' : g.moves[c] < 3 ? 'Du hast weniger als 3 Züge gemacht.' : null;
@@ -1673,7 +1695,7 @@ io.on('connection', (socket) => {
   socket.on('four:leave', need(() => {
     leaveLobby(user.id);
     const g = fourGameOf(user.id);
-    if (g) { const c = fourColorOf(g, user.id); if (g.state.alive[c]) fourEliminate(g, c, 'resign'); userFour.delete(user.id); }
+    if (g) { const c = fourColorOf(g, user.id); if (g.status === 'playing' && g.state.alive[c]) { fourEliminate(g, c, 'resign'); noteResign(user.id, true); } userFour.delete(user.id); }
   }));
   socket.on('four:move', need(({ from, to } = {}, ack) => {
     const g = fourGameOf(user.id);
@@ -1687,7 +1709,7 @@ io.on('connection', (socket) => {
   }));
   socket.on('four:resign', need(() => {
     const g = fourGameOf(user.id);
-    if (g) fourEliminate(g, fourColorOf(g, user.id), 'resign');
+    if (g && g.status === 'playing' && g.state.alive[fourColorOf(g, user.id)]) { fourEliminate(g, fourColorOf(g, user.id), 'resign'); noteResign(user.id, true); }
   }));
 
   socket.on('room:cancel', need(() => { for (const [c, r] of rooms) if (r.hostId === user.id) rooms.delete(c); }));
