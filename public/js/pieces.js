@@ -129,14 +129,14 @@ export function pieceSVG(type, color, look) {
 }
 
 // 3D-Figuren: einmal mit Three.js rendern (lazy), auf dem Gerät speichern, bis dahin Platzhalter zeigen
-const SPRITE_KEY = 'pieces3d-v4';
+const SPRITE_KEY = 'pieces3d-v5';
 const sprites3d = new Map();
 let loading3d = null;
 try { const c = JSON.parse(localStorage.getItem(SPRITE_KEY) || 'null'); if (c) for (const [k, v] of Object.entries(c)) sprites3d.set(k, `url("${v}")`); } catch { /* egal */ }
 function load3d() {
   if (loading3d || typeof window === 'undefined') return;
   loading3d = import('./finisher.js').then((m) => {
-    const map = m.renderPieceSprites({ size: 200 });
+    const map = m.renderPieceSprites({ size: 256 });
     const store = {};
     for (const [k, url] of map) { sprites3d.set(k, `url("${url}")`); store[k] = url; }
     try { localStorage.setItem(SPRITE_KEY, JSON.stringify(store)); } catch { /* Speicher voll – egal */ }
@@ -159,7 +159,8 @@ export function pieceURL(type, color, skinId) {
 // auf Handy & iPad sehr teuer. Deshalb im Hintergrund in PNG-Bilder umwandeln und danach überall diese nutzen.
 const raster = new Map(), rasterQueue = [], rasterQueued = new Set(), rasterDone = new Map();
 let rasterRunning = false, patchTimer = 0;
-const RASTER_PX = typeof window === 'undefined' ? 0 : Math.min(256, Math.ceil(100 * (window.devicePixelRatio || 1)));
+// großzügig: Figuren werden bis ~130 CSS-Pixel groß angezeigt, dazu die Pixeldichte des Geräts
+const RASTER_PX = typeof window === 'undefined' ? 0 : Math.min(384, Math.ceil(140 * Math.max(1, window.devicePixelRatio || 1)));
 function queueRaster(key) {
   if (!RASTER_PX || rasterQueued.has(key) || typeof document === 'undefined') return;
   rasterQueued.add(key); rasterQueue.push(key);
@@ -172,9 +173,13 @@ async function rasterStep() {
     const key = rasterQueue.shift(), svgUrl = cache.get(key);
     try {
       const img = new Image();
-      img.src = svgUrl.slice(5, -2);
+      // feste Größe eintragen – sonst rechnet Safari die Grafik klein aus und zieht sie hoch (unscharf)
+      const svg = decodeURIComponent(svgUrl.slice(svgUrl.indexOf(',') + 1, -2)).replace('<svg ', `<svg width="${RASTER_PX}" height="${RASTER_PX}" `);
+      img.width = img.height = RASTER_PX;
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
       await img.decode();
       ctx.clearRect(0, 0, RASTER_PX, RASTER_PX);
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, RASTER_PX, RASTER_PX);
       const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
       if (!blob) continue;
