@@ -1,5 +1,5 @@
 import { Chess } from '../vendor/chess.js';
-import { pieceURL } from './pieces.js';
+import { pieceURL, applyAura, auraVars } from './pieces.js';
 import { BOARDS } from './catalog.js';
 import { boardTextures } from './textures.js';
 
@@ -56,7 +56,7 @@ export class Board {
   }
 
   setOrientation(c) { this.orientation = c; this._layoutSquares(); this._render(false); this.view3d?.camPose(); }
-  setSkins(skins) { this.skins = { ...skins }; for (const [sq, p] of this.pieceEls) p.el.style.backgroundImage = pieceURL(p.type, p.color, this.skins[p.color]); this.view3d?.setSkins(); }
+  setSkins(skins) { this.skins = { ...skins }; for (const [sq, p] of this.pieceEls) { p.el.style.backgroundImage = pieceURL(p.type, p.color, this.skins[p.color]); applyAura(p.el, this.skins[p.color], p.color); } this.view3d?.setSkins(); }
   setTheme(id) { applyBoardTheme(this.el, id); this.view3d?.setTheme(id); }
   disable3d() { this.view3d?.dispose(); this.view3d = null; }
 
@@ -138,6 +138,7 @@ export class Board {
         const el = document.createElement('div');
         el.className = 'piece' + (animate ? ' fade-in' : '');
         el.style.backgroundImage = pieceURL(n.type, n.color, this.skins[n.color]);
+        applyAura(el, this.skins[n.color], n.color);
         el.classList.add('no-anim');
         this._place(el, sq);
         this.pieceLayer.appendChild(el);
@@ -307,7 +308,8 @@ export function miniBoard(themeId, skins = { w: 'klassisch', b: 'klassisch' }, f
       const bp = () => `--bp:${(x / 7) * 100}% ${(y / 7) * 100}%`;
       if (/\d/.test(ch)) { for (let i = 0; i < +ch; i++, x++) html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}" style="${bp()}"></i>`; continue; }
       const color = ch === ch.toUpperCase() ? 'w' : 'b';
-      html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}" style="${bp()};--p:${pieceURL(ch.toLowerCase(), color, skins[color]).replace(/"/g, '&quot;')}"></i>`;
+      const av = auraVars(skins[color], color);
+      html += `<i class="${(x + y) % 2 ? 'dark' : 'light'}${av ? ' aura' : ''}" style="${bp()};--p:${pieceURL(ch.toLowerCase(), color, skins[color]).replace(/"/g, '&quot;')}${av ? `;${av.replace(/"/g, '&quot;')};--ad:-${((x * 7 + y * 3) % 10) / 5}s` : ''}"></i>`;
       x++;
     }
   });

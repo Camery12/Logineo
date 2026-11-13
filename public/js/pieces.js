@@ -173,3 +173,31 @@ export function pieceURL4(type, color) {
   }
   return cache4.get(key);
 }
+
+// ---------------------------------------------------------------- Auren (z. B. Blitz): zwei Blitz-Muster je Farbe, abwechselnd eingeblendet
+const AURA_COLORS = { lightning: { w: ['#fff7c2', '#ffc400'], b: ['#e6fbff', '#29b6ff'] } };
+const BOLTS = [
+  'M50 4l-5 9 7 3-7 11M93 38l-11 5 5 6-12 6M8 60l11-3-3 9 12 2M58 97l-4-10 7-4-8-11M20 14l8 9-6 4 9 8',
+  'M80 10l-7 9 6 4-9 8M96 70l-11-2 2 8-12-1M4 30l10 4-5 6 11 4M36 98l3-11-7-3 8-10M66 3l-1 10 6-1-3 11',
+];
+const auraCache = new Map();
+export function auraOf(look) { return PIECES.find((p) => p.id === splitLook(look).skin)?.aura || null; }
+// CSS-Variablen für eine Figur mit Aura (oder '' ohne Aura)
+export function auraVars(look, color) {
+  const kind = auraOf(look); if (!kind) return '';
+  const key = kind + color;
+  if (!auraCache.has(key)) {
+    const [core, glow] = AURA_COLORS[kind][color];
+    const svg = (d) => `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='none' stroke-linecap='round' stroke-linejoin='round'><path d='${d}' stroke='${glow}' stroke-width='7' opacity='.45'/><path d='${d}' stroke='${glow}' stroke-width='3.6'/><path d='${d}' stroke='${core}' stroke-width='1.4'/></g></svg>`)}")`;
+    auraCache.set(key, `--boltA:${svg(BOLTS[0])};--boltB:${svg(BOLTS[1])};--aura:${glow}`);
+  }
+  return auraCache.get(key);
+}
+// Auf ein Figuren-Element anwenden (Klasse + Variablen + eigener Flacker-Rhythmus)
+export function applyAura(el, look, color) {
+  const vars = auraVars(look, color);
+  el.classList.toggle('aura', !!vars);
+  if (!vars) { for (const v of ['--boltA', '--boltB', '--aura', '--ad']) el.style.removeProperty(v); return; }
+  for (const part of vars.split(/;(?=--)/)) { const i = part.indexOf(':'); el.style.setProperty(part.slice(0, i), part.slice(i + 1)); }
+  if (!el.style.getPropertyValue('--ad')) el.style.setProperty('--ad', `${(-Math.random() * 2).toFixed(2)}s`);
+}
