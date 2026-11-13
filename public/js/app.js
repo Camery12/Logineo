@@ -13,6 +13,7 @@ import { COLOR_NAMES, COLOR_HEX, TEAM_NAMES } from './four.js';
 import { pieceURL4 } from './pieces.js';
 import * as AX from './admin-extra.js';
 import { renderCasino } from './casino.js';
+import * as TR from './trade.js';
 
 // ================================================================ Helfer
 const $ = (s, r = document) => r.querySelector(s);
@@ -1005,6 +1006,7 @@ async function renderFriends() {
           <div class="fr-search"><input id="fr-q" placeholder="🔎 Spieler suchen (Name)…" autocomplete="off" maxlength="20"></div>
           <div id="fr-results"></div>
           <div id="fr-requests"></div>
+          <div id="tr-list"></div>
           <div class="fr-h-row"><h4 class="fr-h">Gruppen</h4><button class="btn sm" id="grp-new">➕ Gruppe erstellen</button></div>
           <div id="grp-list"></div>
           <h4 class="fr-h">Deine Freunde</h4>
@@ -1016,7 +1018,7 @@ async function renderFriends() {
     $('#fr-q').oninput = () => { clearTimeout(tm); tm = setTimeout(searchPlayers, 250); };
     $('#grp-new').onclick = () => groupDialog();
   }
-  await Promise.all([loadFriends(), loadGroups()]);
+  await Promise.all([loadFriends(), loadGroups(), TR.renderTradeList()]);
   if (state.chatGroup) openGroup(state.chatGroup, { keep: true });
   else if (state.chatWith) openChat(state.chatWith, { keep: true });
 }
@@ -1248,6 +1250,7 @@ async function openChat(id, { keep = false } = {}) {
       <span class="fr-av">${avatar(f.avatar, 40)}${f.online ? '<i class="dot"></i>' : ''}</span>
       <div class="fr-name"><b>${esc(f.name)}</b><span id="ch-status">${f.online ? 'online' : 'offline'} · ${f.rating} Elo</span></div>
       <button class="btn sm" id="ch-challenge" title="Zu einer Partie herausfordern">⚔️ Spielen</button>
+      <button class="btn sm" id="ch-trade" title="Bretter, Figuren, Formen, Finisher oder Münzen tauschen">🔁 Handeln</button>
       <button class="btn sm" id="ch-profile" title="Profil">👤</button>
       <button class="btn sm danger" id="ch-remove" title="Freund entfernen">🗑️</button>
     </div>
@@ -1258,6 +1261,7 @@ async function openChat(id, { keep = false } = {}) {
   msgs.scrollTop = msgs.scrollHeight;
   $('.ch-back', box).onclick = () => { state.chatWith = null; $('.friends-layout')?.classList.remove('chat-open'); loadFriends(); };
   $('#ch-profile').onclick = () => showPlayerProfile(id);
+  $('#ch-trade').onclick = () => TR.openTrade(id);
   $('#ch-challenge').onclick = () => pickTime(`⚔️ ${esc(f.name)} herausfordern`, async (timeMs) => { const rr = await emit('friend:challenge', { id, timeMs }); rr.error ? toast(esc(rr.error), 'warn') : toast(`⚔️ Herausforderung an ${esc(f.name)} gesendet (${timeLabel(timeMs)})…`, 'good'); });
   $('#ch-remove').onclick = () => confirmBox('Freund entfernen?', `${esc(f.name)} wird aus deiner Freundesliste entfernt. Ihr könnt euch dann nicht mehr schreiben.`, 'Entfernen', async () => {
     await emit('friend:remove', { id }); state.chatWith = null; box.innerHTML = ''; $('.friends-layout')?.classList.remove('chat-open'); loadFriends();
@@ -2882,3 +2886,5 @@ $('#ver-pill').textContent = 'v' + VERSION;
 $('#ver-pill').onclick = (e) => { e.preventDefault(); e.stopPropagation(); showChangelog(); };
 renderFooter();
 AX.initAdminExtra({ $, $$, esc, emit, avatar, toast, openOverlay, confirmBox, fmtNum, timeAgo, openReplay, showPlayerProfile, watchGame, REASONS, openPlayerTab });
+TR.initTrade({ emit, $, $$, esc, toast, avatar, openOverlay, fmtNum, notify, setProfile, state, sound, confetti });
+socket.on('trade:update', TR.onTradeUpdate);

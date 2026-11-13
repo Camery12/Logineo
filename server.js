@@ -13,6 +13,7 @@ import { VERSION } from './public/js/version.js';
 import * as Four from './public/js/four.js';
 import { setupAdmin } from './server-admin.js';
 import { setupCasino } from './server-casino.js';
+import { setupTrade } from './server-trade.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -1289,6 +1290,7 @@ const adminApi = setupAdmin({
 });
 
 const casino = setupCasino({ save, priv, io });
+const trade = setupTrade({ getDb: () => db, online, emitTo, pub, priv, save, social, chatLoad, chatStore, banErr, log: (...a) => adminApi.log(...a) });
 
 io.on('connection', (socket) => {
   let user = null;
@@ -1441,6 +1443,7 @@ io.on('connection', (socket) => {
     ack?.({ ok: true, coins: PUZZLE_REWARD, streak: user.puzzleStreak, profile: priv(user) });
   }));
   casino.register(socket, () => user, need);
+  trade.register(socket, () => user, need);
   socket.on('admin:find', need(({ query } = {}, ack) => {
     if (!isAdmin(user)) return ack?.({ error: 'Keine Berechtigung.' });
     const t = findTarget(query);
@@ -2167,4 +2170,5 @@ try {
 for (const u of Object.values(db.users)) { byToken.set(u.token, u); byCode.set(u.code, u); }
 migrateUsers();
 await adminApi.init();
+await trade.init();
 server.listen(PORT, () => console.log(`♞ SchachArena läuft auf http://localhost:${PORT}`));
