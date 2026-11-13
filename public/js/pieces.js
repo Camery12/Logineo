@@ -148,8 +148,53 @@ export const has3dSprites = () => sprites3d.size === 12;
 export function pieceURL(type, color, skinId) {
   if (splitLook(skinId).skin === 'figuren3d') { const s = sprites3d.get(type + color); if (s) return s; load3d(); }
   const key = type + color + skinId;
+  if (raster.has(key)) return raster.get(key);
   if (!cache.has(key)) cache.set(key, `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(pieceSVG(type, color, skinId))}")`);
+  queueRaster(key);
   return cache.get(key);
+}
+
+// ---------------------------------------------------------------- Leistung: Figuren einmal in fertige Bilder umwandeln
+// Vektor-Figuren mit Schatten/Wirbeln muss der Browser bei jedem Neuzeichnen (z. B. Scrollen) neu berechnen –
+// auf Handy & iPad sehr teuer. Deshalb im Hintergrund in PNG-Bilder umwandeln und danach überall diese nutzen.
+const raster = new Map(), rasterQueue = [], rasterQueued = new Set(), rasterDone = new Map();
+let rasterRunning = false, patchTimer = 0;
+const RASTER_PX = typeof window === 'undefined' ? 0 : Math.min(256, Math.ceil(100 * (window.devicePixelRatio || 1)));
+function queueRaster(key) {
+  if (!RASTER_PX || rasterQueued.has(key) || typeof document === 'undefined') return;
+  rasterQueued.add(key); rasterQueue.push(key);
+  if (!rasterRunning) { rasterRunning = true; (window.requestIdleCallback || ((f) => setTimeout(f, 30)))(rasterStep, { timeout: 300 }); }
+}
+async function rasterStep() {
+  const canvas = rasterStep.c ||= Object.assign(document.createElement('canvas'), { width: RASTER_PX, height: RASTER_PX });
+  const ctx = canvas.getContext('2d');
+  for (let n = 0; n < 6 && rasterQueue.length; n++) {
+    const key = rasterQueue.shift(), svgUrl = cache.get(key);
+    try {
+      const img = new Image();
+      img.src = svgUrl.slice(5, -2);
+      await img.decode();
+      ctx.clearRect(0, 0, RASTER_PX, RASTER_PX);
+      ctx.drawImage(img, 0, 0, RASTER_PX, RASTER_PX);
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+      if (!blob) continue;
+      const url = `url("${URL.createObjectURL(blob)}")`;
+      raster.set(key, url); rasterDone.set(svgUrl, url);
+    } catch { /* bleibt Vektor */ }
+  }
+  clearTimeout(patchTimer); patchTimer = setTimeout(patchDom, 120);
+  if (rasterQueue.length) (window.requestIdleCallback || ((f) => setTimeout(f, 30)))(rasterStep, { timeout: 300 });
+  else rasterRunning = false;
+}
+// Schon angezeigte Figuren (Brett, Shop, Profil …) direkt auf die Bilder umstellen
+function patchDom() {
+  if (!rasterDone.size) return;
+  const done = [...rasterDone]; rasterDone.clear();
+  for (const el of document.querySelectorAll('[style*="svg+xml"]')) {
+    let st = el.getAttribute('style'), changed = false;
+    for (const [svg, png] of done) if (st.includes(svg)) { st = st.split(svg).join(png); changed = true; }
+    if (changed) el.setAttribute('style', st);
+  }
 }
 
 // 4er-Schach: vier Spielerfarben + Grau für ausgeschiedene Spieler

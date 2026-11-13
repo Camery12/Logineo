@@ -1157,3 +1157,24 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
 /* Blitz B springt (gedreht) an neue Stellen und blitzt kurz auf */
 @keyframes zapB { 0% { opacity: 0; transform: rotate(0deg); } 9% { opacity: 1; } 11% { opacity: 0; } 20% { opacity: .9; transform: rotate(0deg); } 22% { opacity: 0; transform: rotate(95deg); } 35% { opacity: 1; } 37% { opacity: 0; } 50% { transform: rotate(190deg); } 60% { opacity: 1; } 62% { opacity: 0; } 75% { transform: rotate(280deg); } 85% { opacity: .9; } 87% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .piece.aura::before, .piece.aura::after, .mini-board i.aura::before, .mini-board i.aura::after { animation: none; opacity: .6; } }
+
+/* ================================================================ Leistung (Handy & iPad)
+   1) Kein Milchglas (backdrop-filter) auf Karten & Leisten – das zeichnet bei jedem Bild den Hintergrund neu.
+   2) Inhalte außerhalb des Bildschirms werden nicht gezeichnet (content-visibility).
+   3) Figuren: „Aufsetzen“ über scale statt background-size (Grafikkarte statt Neuzeichnen). */
+.card { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.board-wait { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(8, 10, 18, .78); }
+@media (max-width: 760px), (pointer: coarse) {
+  .nav { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(11, 13, 20, .98); }
+  .overlay { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(5, 6, 10, .86); }
+  .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(11, 13, 20, .97); }
+}
+.shop-item, .bot-card, .badge-item, .rp-item, .adm-match { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+.badge-item, .rp-item, .adm-match { contain-intrinsic-size: auto 90px; }
+@keyframes land { 0% { scale: 1.07; } 100% { scale: 1; } }
+@keyframes promoGlow { 0% { scale: 1.18; opacity: .85; } 100% { scale: 1; opacity: 1; } }
+/* Blitz-Aura auf Touch-Geräten: nur eine animierte Ebene pro Figur */
+@media (pointer: coarse) {
+  .piece.aura::after, .mini-board i.aura::after { display: none; }
+  .piece.aura::before, .mini-board i.aura::before { will-change: opacity; animation-duration: 2.2s; }
+}

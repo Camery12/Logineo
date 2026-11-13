@@ -115,6 +115,8 @@ socket.on('server:restarting', () => { state.restarting = true; toast('🔄 Ein 
 
 // 3D-Finisher schon im Hintergrund laden und vorbereiten, damit er sofort startet
 function warmFinisherLater() {
+  // Handy & iPad: nicht vorbereiten – das blockiert dort sekundenlang (der Finisher lädt dann erst beim ersten Matt)
+  if (matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 1) return;
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1));
   setTimeout(() => idle(async () => {
     try {
