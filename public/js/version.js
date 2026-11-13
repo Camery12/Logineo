@@ -1,7 +1,8 @@
 // Bei jeder neuen Version hochzählen
-export const VERSION = '1.20.2';
+export const VERSION = '1.21.0';
 export const VERSION_DATE = '2026-11-13';
 export const CHANGELOG = [
+  ['1.21.0', 'Zug-Punkte auf jedem Brett gut sichtbar (invertierte Farbe, auch im 4er- und 3D-Brett). Noobi hat jetzt 0 Elo und spielt wie ein totaler Neuling; alle Bots neu abgestimmt, passend zu ihrem Elo'],
   ['1.20.2', 'Viel flüssiger auf Handy und iPad: kein Einfrieren mehr nach dem Öffnen, Figuren werden als fertige Bilder gezeichnet, kein teurer Milchglas-Effekt mehr, sparsamere Blitz-Aura und Animationen'],
   ['1.20.1', 'Ruckeln bei den Blitz-Figuren behoben: die Aura läuft jetzt über die Grafikkarte – fast doppelt bis dreifach so flüssig, besonders auf iPads'],
   ['1.20.0', 'Neues Blitz-Paket: Figuren „Blitz“ mit echter, zuckender Blitz-Aura (golden bei Weiß, eisblau bei Schwarz), Brett „Gewitterfront“ und der Donnerschlag-Finisher – zusammen 2.000 statt 4.900 Münzen'],

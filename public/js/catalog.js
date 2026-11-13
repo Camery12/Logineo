@@ -185,14 +185,16 @@ export const BUNDLES = [
   { id: 'koenig', name: 'Königs-Paket', icon: '👑', discount: 0.25, items: [['board', 'royal'], ['pieces', 'gold'], ['finisher', 'laser']], desc: 'Das Luxuriöseste: Königsgold, Gold & Obsidian und der Orbital-Laser.' },
 ];
 
-// Bots: niedrige Stufen spielen schwach, nehmen aber freie Figuren meistens mit.
-// margin: Fehlzüge nur aus Zügen, die höchstens so viel schlechter sind (Centipawns).
+// Bots – Spielstärke passend zum Elo:
+// random: Wahrscheinlichkeit für einen völlig zufälligen Zug (wie jemand, der die Figuren gerade erst kennt)
+// blunder/margin: Fehlzug aus Zügen, die höchstens `margin` Centipawns schlechter sind · noise: Unschärfe der Bewertung
+// maxDepth/timeMs: wie weit voraus gerechnet wird
 export const BOTS = [
-  { id: 1, name: 'Noobi', level: 'Noob', elo: 100, avatar: '🐣', color: '#7ee787', reward: 15, finisher: 'klassisch', cfg: { maxDepth: 1, timeMs: 80, noise: 400, blunder: 0.6, margin: 2000 }, quote: 'Ich klicke einfach irgendwas!' },
-  { id: 2, name: 'Bauer Bernd', level: 'Anfänger', elo: 400, avatar: '👨‍🌾', color: '#a5d6ff', reward: 30, finisher: 'klassisch', cfg: { maxDepth: 1, timeMs: 120, noise: 220, blunder: 0.35, margin: 600 }, quote: 'Ich kenne schon alle Regeln.' },
-  { id: 3, name: 'Springer Sam', level: 'Fortgeschritten', elo: 800, avatar: '🐴', color: '#d2a8ff', reward: 60, finisher: 'feuerwerk', cfg: { maxDepth: 2, timeMs: 300, noise: 110, blunder: 0.18, margin: 300 }, quote: 'Hüpf, hüpf – Gabel!' },
-  { id: 4, name: 'Läufer Lena', level: 'Experte', elo: 1200, avatar: '🦊', color: '#ffa657', reward: 110, finisher: 'blitz', cfg: { maxDepth: 3, timeMs: 600, noise: 55, blunder: 0.08, margin: 150 }, quote: 'Diagonalen sind mein Revier.' },
-  { id: 5, name: 'Turm Theo', level: 'Meister', elo: 1600, avatar: '🏰', color: '#ff7b72', reward: 200, finisher: 'meteor', cfg: { maxDepth: 4, timeMs: 1000, noise: 25, blunder: 0.03, margin: 80 }, quote: 'Mauern brechen? Viel Glück.' },
+  { id: 1, name: 'Noobi', level: 'Totaler Neuling', elo: 0, avatar: '🐣', color: '#7ee787', reward: 15, finisher: 'klassisch', cfg: { random: 0.55, maxDepth: 1, timeMs: 60, noise: 350, blunder: 0.3, margin: 900 }, quote: 'Hab gestern erst angefangen … wie zieht nochmal das Pferd?' },
+  { id: 2, name: 'Bauer Bernd', level: 'Anfänger', elo: 400, avatar: '👨‍🌾', color: '#a5d6ff', reward: 30, finisher: 'klassisch', cfg: { random: 0.15, maxDepth: 1, timeMs: 120, noise: 200, blunder: 0.3, margin: 450 }, quote: 'Ich kenne schon alle Regeln – fast.' },
+  { id: 3, name: 'Springer Sam', level: 'Fortgeschritten', elo: 800, avatar: '🐴', color: '#d2a8ff', reward: 60, finisher: 'feuerwerk', cfg: { random: 0.03, maxDepth: 2, timeMs: 300, noise: 90, blunder: 0.17, margin: 250 }, quote: 'Hüpf, hüpf – Gabel!' },
+  { id: 4, name: 'Läufer Lena', level: 'Experte', elo: 1200, avatar: '🦊', color: '#ffa657', reward: 110, finisher: 'blitz', cfg: { maxDepth: 3, timeMs: 600, noise: 45, blunder: 0.08, margin: 130 }, quote: 'Diagonalen sind mein Revier.' },
+  { id: 5, name: 'Turm Theo', level: 'Meister', elo: 1600, avatar: '🏰', color: '#ff7b72', reward: 200, finisher: 'meteor', cfg: { maxDepth: 4, timeMs: 1000, noise: 18, blunder: 0.03, margin: 70 }, quote: 'Mauern brechen? Viel Glück.' },
   { id: 6, name: 'Dame Diana', level: 'Schlau', elo: 2200, avatar: '👑', color: '#f2cc60', reward: 400, finisher: 'loch', cfg: { maxDepth: 30, timeMs: 2500, noise: 0, blunder: 0 }, quote: 'Ich habe deinen Zug schon gesehen.' },
   // Hugo: volle Rechenzeit, keine Fehler, kein vorzeitiges Abbrechen – das Stärkste, was die Engine kann
   { id: 7, name: 'Hugo', level: 'Legende', elo: Infinity, legend: true, avatar: '🧠', color: '#c084fc', reward: 2500, finisher: 'supernova', cfg: { maxDepth: 40, timeMs: 7000, noise: 0, blunder: 0, full: true }, quote: 'Ich habe jede Partie schon gespielt – auch deine.' },

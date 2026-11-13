@@ -425,10 +425,12 @@ export class Engine {
   // Liefert {from, to, promotion, score, depth}
   // blunder: Wahrscheinlichkeit für einen „menschlichen“ Fehlzug – aber nur aus Zügen,
   // die höchstens `margin` Centipawns schlechter sind (keine völlig sinnlosen Züge mehr)
-  think({ maxDepth = 4, timeMs = 1500, noise = 0, blunder = 0, margin = 200, full = false } = {}) {
+  think({ maxDepth = 4, timeMs = 1500, noise = 0, blunder = 0, margin = 200, full = false, random = 0 } = {}) {
     const legal = this.legalMoves();
     if (!legal.length) return null;
     const toObj = (m, extra = {}) => ({ from: sqName(mFrom(m)), to: sqName(mTo(m)), promotion: mPro(m) ? ' pnbrqk'[mPro(m)] : undefined, ...extra });
+    // Völlig zufälliger Zug – so spielt jemand, der gerade erst angefangen hat
+    if (random && Math.random() < random) return toObj(legal[(Math.random() * legal.length) | 0], { random: true, score: 0, depth: 0 });
     const base = this.stack.length;
     this.killers.fill(0); this.history.fill(0);
     this.nodes = 0;

@@ -263,7 +263,8 @@ export class Board3D {
     if (b.selected) {
       for (const mv of b.chess.moves({ square: b.selected, verbose: true })) {
         if (mv.promotion && mv.promotion !== 'q') continue;
-        const mat = new THREE.MeshBasicMaterial({ color: '#141420', transparent: true, opacity: 0.45, depthWrite: false });
+        // invertiert die Farbe darunter (Ergebnis = 1 − Untergrund) – auf jedem Brett gut sichtbar
+        const mat = new THREE.MeshBasicMaterial({ color: '#ffffff', depthWrite: false, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.ZeroFactor });
         const m = new THREE.Mesh(mv.captured ? this.ringGeo : this.dotGeo, mat);
         if (mv.captured) m.rotation.x = Math.PI / 2;
         m.position.copy(sqPos(mv.to)); m.position.y = SQ_Y + 0.02; m.renderOrder = 3;

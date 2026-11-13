@@ -1178,3 +1178,11 @@ button.adm-match:hover { border-color: rgba(124, 92, 255, .5); }
   .piece.aura::after, .mini-board i.aura::after { display: none; }
   .piece.aura::before, .mini-board i.aura::before { will-change: opacity; animation-duration: 2.2s; }
 }
+
+/* ================================================================ Zug-Punkte immer gut sichtbar: invertieren die Farbe darunter */
+.b-hints { mix-blend-mode: difference; }
+.hint::after { background: rgba(255, 255, 255, .78); width: 32%; height: 32%; }
+.hint.cap::after { background: transparent; border: 5px solid rgba(255, 255, 255, .78); }
+.fmk.dot { mix-blend-mode: difference; }
+.fmk.dot::after { background: rgba(255, 255, 255, .78); }
+.fmk.dot.cap::after { background: none; border-color: rgba(255, 255, 255, .78); }
