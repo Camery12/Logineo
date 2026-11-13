@@ -2730,8 +2730,8 @@ function renderStudio(root, p) {
         ${p.music ? `<div class="st-song"><b>🎶 ${esc(p.music.title)}</b>
             <form id="st-mtitle" class="adm-row"><input name="t" maxlength="40" value="${esc(p.music.title)}" placeholder="Songtitel"><button class="btn sm">Titel speichern</button></form>
             <label class="st-vol">Lautstärke <input type="range" id="st-mvol" min="0" max="100" value="${Math.round((p.music.volume ?? 0.6) * 100)}"></label>
-            <div class="st-row"><label class="btn sm">🔁 Anderen Song<input type="file" accept="audio/*" id="st-music" hidden></label><button class="btn sm danger" id="st-mdel">Song entfernen</button></div></div>`
-          : `<label class="btn primary sm st-upload">⬆️ Song hochladen<input type="file" accept="audio/*" id="st-music" hidden></label>`}
+            <div class="st-row"><label class="btn sm">🔁 Anderen Song<input type="file" accept="audio/*,.ogg,.oga,.mp3,.m4a,.wav,.flac,.aac,.webm" id="st-music" hidden></label><button class="btn sm danger" id="st-mdel">Song entfernen</button></div></div>`
+          : `<label class="btn primary sm st-upload">⬆️ Song hochladen<input type="file" accept="audio/*,.ogg,.oga,.mp3,.m4a,.wav,.flac,.aac,.webm" id="st-music" hidden></label>`}
       </div>
     </div></section>`);
   root.appendChild(box);

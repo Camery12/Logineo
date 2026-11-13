@@ -264,6 +264,22 @@ const publicProfile = (u) => ({
   history: u.history.slice(0, 8).map((h) => ({ type: h.type, opponent: h.opponent, oppAvatar: h.oppAvatar, outcome: h.outcome, reason: h.reason, rating: h.rating, at: h.at })),
 });
 
+// Audioformat am Dateiinhalt erkennen (die ersten Bytes), unabhängig vom Typ, den der Browser angibt
+function sniffAudio(dataUrl) {
+  const comma = dataUrl.indexOf(',');
+  if (!dataUrl.startsWith('data:') || comma < 0 || !dataUrl.slice(0, comma).includes(';base64')) return null;
+  const b = Buffer.from(dataUrl.slice(comma + 1, comma + 1 + 64), 'base64');
+  const str = (i, n) => b.toString('latin1', i, i + n);
+  if (str(0, 4) === 'OggS') return 'audio/ogg';
+  if (str(0, 3) === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && (b[1] & 0x06) !== 0)) return 'audio/mpeg';
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return 'audio/aac';
+  if (str(0, 4) === 'RIFF' && str(8, 4) === 'WAVE') return 'audio/wav';
+  if (str(4, 4) === 'ftyp') return 'audio/mp4';
+  if (str(0, 4) === 'fLaC') return 'audio/flac';
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'audio/webm';
+  return null;
+}
+
 // ---------------------------------------------------------------- Profilsongs (eigene Sammlung, damit Profile klein bleiben)
 async function musicGet(id) {
   if (mongoUsers) { const d = await mongoMusic.findOne({ id }); return d ? d.data : null; }
@@ -1617,9 +1633,11 @@ io.on('connection', (socket) => {
     try {
       if (remove) { await musicDel(user.id); user.music = null; save(); return ack?.({ profile: priv(user) }); }
       if (data !== undefined) {
-        const ok = typeof data === 'string' && /^data:audio\/(mpeg|mp3|ogg|wav|x-wav|mp4|x-m4a|aac|webm);base64,/.test(data);
-        if (!ok) return ack?.({ error: 'Bitte eine Audiodatei (MP3, OGG, M4A, WAV) hochladen.' });
-        if (data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal 5 MB).' });
+        if (typeof data !== 'string' || data.length > MUSIC_MAX_BYTES * 1.37 + 100) return ack?.({ error: 'Der Song ist zu groß (maximal 5 MB).' });
+        // Browser melden Audio oft falsch (z. B. .ogg als video/ogg oder application/ogg) – darum den Inhalt selbst erkennen
+        const mime = sniffAudio(data);
+        if (!mime) return ack?.({ error: 'Bitte eine Audiodatei (MP3, OGG, M4A, WAV, AAC, FLAC, WebM) hochladen.' });
+        data = `data:${mime};base64,` + data.slice(data.indexOf(',') + 1);
         await musicSet(user.id, data);
         user.music = { title: user.music?.title || 'Profilsong', volume: user.music?.volume ?? 0.6, at: Date.now() };
       }
